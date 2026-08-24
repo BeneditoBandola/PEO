@@ -41,7 +41,6 @@ def baixar_dados_pdvpet():
         return False
 
     with sync_playwright() as p:
-        # Inicia o Chromium configurado para parecer um navegador desktop comum
         browser = p.chromium.launch(
             headless=True,
             args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
@@ -57,11 +56,9 @@ def baixar_dados_pdvpet():
             page.goto("https://www.pdvpet.com.br/", timeout=60000, wait_until="networkidle")
 
             print("🔑 Preenchendo dados de login...")
-            # Preenche login e senha
             page.fill('input[type="text"], input[name*="user"], input[name*="cpf"], input[name*="login"]', USUARIO_PDV)
             page.fill('input[type="password"]', SENHA_PDV)
 
-            # Tenta clicar no botão de submissão do formulário
             try:
                 page.click('button[type="submit"], input[type="submit"], button:has-text("Entrar")', timeout=5000)
             except Exception:
@@ -72,7 +69,6 @@ def baixar_dados_pdvpet():
             page.wait_for_timeout(3000)
 
             print("📋 Navegando até a aba de Questionários...")
-            # Espera até 60s pelo menu "Questionários"
             page.wait_for_selector('text=/Questionários|QUESTIONÁRIOS/i', timeout=60000)
             page.click('text=/Questionários|QUESTIONÁRIOS/i')
             
@@ -118,7 +114,6 @@ def enviar_email(filial, caminho_pdf):
         print(f"❌ ERRO CRÍTICO: Variáveis EMAIL_REMETENTE ou SENHA_EMAIL não configuradas nos Secrets do GitHub!")
         return
 
-    # Remove espaços acidentais da senha de app do Gmail
     senha_smtp = senha_smtp.replace(" ", "")
 
     destinatarios = list(set(EMAILS_MEUS + EMAILS_PROMOTORES.get(filial, [])))
@@ -145,7 +140,6 @@ def enviar_email(filial, caminho_pdf):
         print(f"⚠️ PDF não encontrado em {caminho_pdf}, enviando e-mail sem anexo.")
 
     try:
-        # Conexão direta via SSL na porta 465 (mais estável para executores na nuvem)
         server = smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=30)
         server.login(usuario_smtp, senha_smtp)
         server.sendmail(usuario_smtp, destinatarios, msg.as_string())
@@ -163,11 +157,14 @@ if __name__ == "__main__":
     
     if sucesso_download and os.path.exists(CAMINHO_CSV_FINAL):
         print("\n--- PROCESSANDO DADOS E GERANDO RELATÓRIOS ---")
-        # Aqui entra a sua lógica existente de processamento do CSV e criação dos PDFs
-        # Exemplo de chamada para cada filial:
-        # for filial in EMAILS_PROMOTORES.keys():
-        #     caminho_pdf = f"relatorio_{filial}.pdf"
-        #     # (gerar pdf...)
-        #     enviar_email(filial, caminho_pdf)
+        
+        # Percorre cada filial para gerar e enviar seus relatórios
+        for filial in EMAILS_PROMOTORES.keys():
+            # Substitua a variável abaixo caso os seus PDFs sigam um padrão de nome diferente
+            caminho_pdf = f"relatorio_{filial}.pdf" 
+            
+            print(f"📤 Iniciando envio para a filial: {filial}")
+            enviar_email(filial, caminho_pdf)
+            
     else:
         print("\n❌ Execução interrompida devido à falha no download do CSV.")
