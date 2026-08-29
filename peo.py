@@ -312,7 +312,7 @@ def processar_e_gerar_relatorios():
     df = pd.read_csv(CAMINHO_CSV_FINAL, sep=';', encoding='latin1')
     
     df['Data_Parsed'] = pd.to_datetime(df['Data'].astype(str).str.split(' ').str[0], format='%d/%m/%Y', errors='coerce')
-    df['Preco_Num'] = pd.to_numeric(df['PrecoKg'].astype(str).str.replace(',', '.'), errors='coerce')
+    df['Preco_Num'] = pd.to_numeric(df['PrecoKg'].astype(str).str.replace('R$', '', regex=False).str.strip().str.replace(',', '.'), errors='coerce')
     
     df['Cidade_Clean'] = df['Cidade'].fillna('')
     df['Uf_Clean'] = df['Uf'].fillna('')
@@ -322,15 +322,24 @@ def processar_e_gerar_relatorios():
     )
 
     df['OpcaoEmbalagem_Clean'] = df['OpcaoEmbalagem'].fillna('')
+    df['Embalagem_Clean'] = df['Embalagem'].fillna('')
+    
+    # Nome para exibição nas tabelas
     df['Item_Nome'] = df.apply(
         lambda r: f"{r['Item']} - {r['OpcaoEmbalagem_Clean']}" if r['OpcaoEmbalagem_Clean'] != '' else str(r['Item']), 
+        axis=1
+    )
+    
+    # Chave para cruzamento com PRECOS_MAXIMOS (OpcaoEmbalagem - Embalagem)
+    df['Chave_Preco'] = df.apply(
+        lambda r: f"{r['OpcaoEmbalagem_Clean']} - {r['Embalagem_Clean']}".strip(" -"),
         axis=1
     )
 
     df_p8 = df[(df['Data_Parsed'] >= INICIO_P8) & (df['Data_Parsed'] <= FIM_P8)]
     df_p9 = df[(df['Data_Parsed'] >= INICIO_P9) & (df['Data_Parsed'] <= FIM_P9)]
 
-    # 1. Mapear Oportunidades Base
+    # 1. Mapear Oportunidades Base (P8 vs P9)
     p8_pares = df_p8[['Distribuidor', 'Cidade_Clean', 'Pdv_Com_Cidade', 'Item', 'Item_Nome']].drop_duplicates()
     p9_pares = df_p9[['Distribuidor', 'Cidade_Clean', 'Pdv_Com_Cidade', 'Item', 'Item_Nome']].drop_duplicates()
 
@@ -340,20 +349,17 @@ def processar_e_gerar_relatorios():
     # 2. Auditar Preços
     alertas_preco = []
     for _, row in df_p9.iterrows():
-        item_nome = row['Item_Nome']
-        opcao_emb = row['OpcaoEmbalagem_Clean']
+        chave = row['Chave_Preco']
         preco = row['Preco_Num']
         
-        chave_preco = opcao_emb if opcao_emb in PRECOS_MAXIMOS else item_nome
-
-        if chave_preco in PRECOS_MAXIMOS and pd.notnull(preco):
-            teto = PRECOS_MAXIMOS[chave_preco]
+        if chave in PRECOS_MAXIMOS and pd.notnull(preco) and preco > 0:
+            teto = PRECOS_MAXIMOS[chave]
             if preco > teto:
                 alertas_preco.append({
                     'Distribuidor': row['Distribuidor'],
                     'Cidade_Clean': row['Cidade_Clean'],
                     'Pdv_Com_Cidade': row['Pdv_Com_Cidade'],
-                    'Item_Nome': item_nome,
+                    'Item_Nome': chave,
                     'Preco_Lido': preco,
                     'Preco_Maximo': teto,
                     'Diferenca': round(preco - teto, 2)
