@@ -2,8 +2,10 @@ name: Execucao Diaria PDV Pet
 
 on:
   schedule:
-    # 19:00 UTC equivale às 16:00 no Horário de Brasília (UTC-3)
-    - cron: '0 19 * * *'
+    # 12:05 UTC equivale às 09:05 da manhã no Horário de Brasília (UTC-3)
+    # (Usar o minuto 05 evita o congestionamento de fila do GitHub no minuto 00)
+    - cron: '5 12 * * *'
+    
   workflow_dispatch: # Permite rodar manualmente a qualquer momento para testar
 
 jobs:
