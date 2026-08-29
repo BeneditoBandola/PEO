@@ -174,8 +174,8 @@ def formatar_texto_por_tipo(item_nome, pdv_info, styles):
     else:
         cor = "#24292f"
 
-    style_pdv = ParagraphStyle('PdvStyle', parent=styles['Normal'], fontSize=9, textColor=colors.HexColor('#24292f'))
-    style_item = ParagraphStyle('ItemStyle', parent=styles['Normal'], fontSize=9, textColor=colors.HexColor(cor), fontName='Helvetica-Bold')
+    style_pdv = ParagraphStyle('PdvStyle', parent=styles['Normal'], fontSize=8.5, leading=10.5, textColor=colors.HexColor('#24292f'))
+    style_item = ParagraphStyle('ItemStyle', parent=styles['Normal'], fontSize=8.5, leading=10.5, textColor=colors.HexColor(cor), fontName='Helvetica-Bold')
 
     return Paragraph(pdv_str, style_pdv), Paragraph(item_str, style_item)
 
@@ -184,14 +184,18 @@ def gerar_pdf_filial(filial, meta_geral_batida, df_oportunidades_filial, df_prec
     nome_arquivo = f"Relatorio_Oportunidades_{filial.replace(' ', '_').replace('-', '')}.pdf"
     caminho_pdf = os.path.join(PASTA_PROJETO, nome_arquivo)
     
-    doc = SimpleDocTemplate(caminho_pdf, pagesize=letter, rightMargin=30, leftMargin=30, topMargin=30, bottomMargin=30)
+    doc = SimpleDocTemplate(caminho_pdf, pagesize=letter, rightMargin=25, leftMargin=25, topMargin=25, bottomMargin=25)
     styles = getSampleStyleSheet()
     
-    title_style = ParagraphStyle('TitleStyle', parent=styles['Heading1'], fontSize=16, textColor=colors.HexColor('#1f6feb'), spaceAfter=6)
-    sub_style = ParagraphStyle('SubStyle', parent=styles['Normal'], fontSize=10, textColor=colors.HexColor('#57606a'), spaceAfter=15)
-    sec_style = ParagraphStyle('SecStyle', parent=styles['Heading2'], fontSize=12, textColor=colors.HexColor('#24292f'), spaceBefore=12, spaceAfter=8)
-    alert_style = ParagraphStyle('AlertStyle', parent=styles['Normal'], fontSize=12, textColor=colors.HexColor('#2ea043'), fontName='Helvetica-Bold')
-    red_alert_style = ParagraphStyle('RedAlertStyle', parent=styles['Normal'], fontSize=9, textColor=colors.HexColor('#dc2626'))
+    title_style = ParagraphStyle('TitleStyle', parent=styles['Heading1'], fontSize=15, textColor=colors.HexColor('#1f6feb'), spaceAfter=4)
+    sub_style = ParagraphStyle('SubStyle', parent=styles['Normal'], fontSize=9.5, textColor=colors.HexColor('#57606a'), spaceAfter=12)
+    sec_style = ParagraphStyle('SecStyle', parent=styles['Heading2'], fontSize=11, textColor=colors.HexColor('#24292f'), spaceBefore=10, spaceAfter=6)
+    alert_style = ParagraphStyle('AlertStyle', parent=styles['Normal'], fontSize=11, textColor=colors.HexColor('#2ea043'), fontName='Helvetica-Bold')
+    
+    style_corrigido = ParagraphStyle('StyleCorrigido', parent=styles['Normal'], fontSize=7.5, leading=9.5, textColor=colors.HexColor('#047857'))
+    style_pendente = ParagraphStyle('StylePendente', parent=styles['Normal'], fontSize=7.5, leading=9.5, textColor=colors.HexColor('#dc2626'), fontName='Helvetica-Bold')
+    style_prod = ParagraphStyle('StyleProd', parent=styles['Normal'], fontSize=8, leading=10, textColor=colors.HexColor('#1f2937'))
+    style_pdv = ParagraphStyle('StylePdv', parent=styles['Normal'], fontSize=8, leading=10, textColor=colors.HexColor('#1f2937'))
 
     elements = []
 
@@ -213,40 +217,58 @@ def gerar_pdf_filial(filial, meta_geral_batida, df_oportunidades_filial, df_prec
                 p_pdv, p_item = formatar_texto_por_tipo(row['Item_Nome'], row['Pdv_Com_Cidade'], styles)
                 dados_tabela.append([p_pdv, p_item])
 
-            t = Table(dados_tabela, colWidths=[240, 290])
+            t = Table(dados_tabela, colWidths=[250, 310])
             t.setStyle(TableStyle([
                 ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#f6f8fa')),
                 ('TEXTCOLOR', (0,0), (-1,0), colors.HexColor('#24292f')),
                 ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-                ('BOTTOMPADDING', (0,0), (-1,0), 6),
+                ('BOTTOMPADDING', (0,0), (-1,0), 5),
+                ('TOPPADDING', (0,0), (-1,0), 5),
                 ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#d0d7de')),
             ]))
             elements.append(t)
 
-    elements.append(Spacer(1, 15))
+    elements.append(Spacer(1, 12))
 
-    # SEÇÃO 2: DIVERGÊNCIAS DE PREÇO
-    elements.append(Paragraph("2. Divergências de Preço (Preços Acima do Máximo)", sec_style))
+    # SEÇÃO 2: DIVERGÊNCIAS DE PREÇO COM STATUS
+    elements.append(Paragraph("2. Auditoria de Preço Máximo (Small Bags)", sec_style))
 
     if df_precos_filial.empty:
         elements.append(Paragraph("✅ Nenhum preço acima do teto foi detectado.", styles['Normal']))
     else:
-        dados_preco = [["PDV / Cidade", "Item / Opção Embalagem", "Lido (R$)", "Teto (R$)", "Dif (R$)"]]
+        tem_pendente = any(df_precos_filial['Status'] != 'Cancelado')
+        if tem_pendente:
+            elements.append(Paragraph("⚠️ <b>ATENÇÃO: Existem itens lidos acima do teto que precisam de correção no PDV!</b>", style_pendente))
+            elements.append(Spacer(1, 4))
+            
+        dados_preco = [["PDV / Cidade", "Produto / Embalagem", "Lido (R$)", "Teto (R$)", "Situação / Observação"]]
         for _, row in df_precos_filial.iterrows():
+            st = str(row['Status'])
+            data_canc = str(row['DataCancelamento']) if pd.notnull(row['DataCancelamento']) else str(row['Data'])
+            
+            if st == 'Cancelado':
+                txt_situacao = f"✅ Corrigido/Cancelado<br/><font size=6.5 color='#57606a'>em {data_canc}</font>"
+                p_status = Paragraph(txt_situacao, style_corrigido)
+            else:
+                txt_situacao = f"⚠️ <b>PENDENTE DE CORREÇÃO</b><br/><font size=6.5 color='#991b1b'>Lido em {row['Data']}</font>"
+                p_status = Paragraph(txt_situacao, style_pendente)
+                
             dados_preco.append([
-                Paragraph(str(row['Pdv_Com_Cidade']), styles['Normal']),
-                Paragraph(f"<b>{row['Item_Nome']}</b>", red_alert_style),
+                Paragraph(str(row['Pdv_Com_Cidade']), style_pdv),
+                Paragraph(str(row['Item_Nome']), style_prod),
                 f"R$ {row['Preco_Lido']:.2f}",
                 f"R$ {row['Preco_Maximo']:.2f}",
-                f"+ R$ {row['Diferenca']:.2f}"
+                p_status
             ])
 
-        t_preco = Table(dados_preco, colWidths=[160, 170, 65, 65, 70])
+        t_preco = Table(dados_preco, colWidths=[150, 160, 55, 55, 140])
         t_preco.setStyle(TableStyle([
             ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#ffebe9')),
             ('TEXTCOLOR', (0,0), (-1,0), colors.HexColor('#cf222e')),
             ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-            ('BOTTOMPADDING', (0,0), (-1,0), 6),
+            ('BOTTOMPADDING', (0,0), (-1,0), 5),
+            ('TOPPADDING', (0,0), (-1,0), 5),
+            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
             ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#ffc1c0')),
         ]))
         elements.append(t_preco)
@@ -259,7 +281,7 @@ def gerar_pdf_filial(filial, meta_geral_batida, df_oportunidades_filial, df_prec
 # ==========================================
 # 3. DISPARO DE E-MAILS
 # ==========================================
-def enviar_email(filial, caminho_pdf):
+def enviar_email(filial, caminho_pdf, tem_preco_pendente):
     if not EMAIL_REMETENTE or not SENHA_EMAIL:
         print(f"❌ ERRO CRÍTICO: Variáveis EMAIL_REMETENTE ou SENHA_EMAIL não foram configuradas nos Secrets!")
         return
@@ -270,11 +292,18 @@ def enviar_email(filial, caminho_pdf):
     msg = MIMEMultipart()
     msg['From'] = EMAIL_REMETENTE
     msg['To'] = ", ".join(destinatarios)
-    msg['Subject'] = f"Relatório de Oportunidades e Auditoria - {filial}"
+    
+    if tem_preco_pendente:
+        msg['Subject'] = f"⚠️ [AÇÃO NECESSÁRIA] Relatório de Oportunidades e Preços - {filial}"
+        alerta_email = "⚠️ ATENÇÃO: Constam divergências de preço pendentes de correção nesta filial. Verifique o anexo para ajustar as lojas.\n\n"
+    else:
+        msg['Subject'] = f"Relatório de Oportunidades e Auditoria - {filial}"
+        alerta_email = ""
 
     corpo = (
         f"Olá,\n\n"
         f"Segue em anexo o relatório diário de oportunidades e auditoria de preços referente à filial {filial}.\n\n"
+        f"{alerta_email}"
         f"Atenciosamente,\n"
         f"Automação PDV Pet\n"
     )
@@ -362,7 +391,10 @@ def processar_e_gerar_relatorios():
                     'Item_Nome': chave,
                     'Preco_Lido': preco,
                     'Preco_Maximo': teto,
-                    'Diferenca': round(preco - teto, 2)
+                    'Diferenca': round(preco - teto, 2),
+                    'Status': row['Status'],
+                    'Data': row['Data'],
+                    'DataCancelamento': row.get('DataCancelamento', '')
                 })
     df_alertas_preco = pd.DataFrame(alertas_preco)
 
@@ -393,11 +425,13 @@ def processar_e_gerar_relatorios():
             if not df_pr_filial.empty:
                 df_pr_filial = df_pr_filial[~df_pr_filial['Cidade_Clean'].str.upper().str.contains("RIBEIRAO PRETO|RIBEIRÃO PRETO", na=False)]
 
+        tem_pendente = not df_pr_filial.empty and any(df_pr_filial['Status'] != 'Cancelado')
+
         # Criação do arquivo de relatório
         caminho_pdf_gerado = gerar_pdf_filial(distribuidor, meta_geral_batida, df_op_filial, df_pr_filial)
 
         # Disparo do e-mail contendo o anexo recém-gerado
-        enviar_email(distribuidor, caminho_pdf_gerado)
+        enviar_email(distribuidor, caminho_pdf_gerado, tem_pendente)
 
 
 if __name__ == "__main__":
