@@ -33,15 +33,15 @@ EMAILS_PROMOTORES = {
     "MINASSAL LTDA - JUIZ DE FORA": ["fernandaferreira_jf@yahoo.com.br", "madallareis66@gmail.com"]
 }
 
-# Configurações de Períodos
-PERIODO_ATUAL = "P9"
-INICIO_P8 = "2026-07-13"
-FIM_P8    = "2026-08-09"
-INICIO_P9 = "2026-08-10"
-FIM_P9    = "2026-09-06"
+# Configurações de Períodos (P9 vs P10)
+PERIODO_ATUAL = "P10"
+INICIO_P9  = "2026-08-10"
+FIM_P9     = "2026-09-06"
+INICIO_P10 = "2026-09-07"
+FIM_P10    = "2026-10-04"
 
 CONFIGURACOES_PERIODOS = {
-    "P9": {
+    "P10": {
         "metas": {
             'MINASSAL LTDA - POCOS DE CALDAS': {'Small Bags': 107, 'Ponto Extra de Sachês/Petiscos': 28, 'Combos Virtuais Sachês': 10, 'Combos Virtuais Petiscos': 10, 'Sheba Cremoso - Leve 2 Pague 1': 10},
             'MINASSAL LTDA - SAO JOAO DA BOA VISTA': {'Small Bags': 334, 'Ponto Extra de Sachês/Petiscos': 53, 'Combos Virtuais Sachês': 10, 'Combos Virtuais Petiscos': 10, 'Sheba Cremoso - Leve 2 Pague 1': 10},
@@ -80,14 +80,14 @@ PRECOS_MAXIMOS = {
 }
 
 PASTA_PROJETO = os.path.dirname(os.path.abspath(__file__))
-CAMINHO_CSV_FINAL = os.path.join(PASTA_PROJETO, "historico_p8_p9.csv")
+CAMINHO_CSV_FINAL = os.path.join(PASTA_PROJETO, "historico_p9_p10.csv")
 
 
 # ==========================================
 # 1. DOWNLOAD DOS DADOS DO PDV PET
 # ==========================================
 def baixar_dados_pdvpet():
-    print(f"\n--- INICIANDO DOWNLOAD DO HISTÓRICO (P8 e P9) ---")
+    print(f"\n--- INICIANDO DOWNLOAD DO HISTÓRICO (P9 e P10) ---")
     
     if not USUARIO_PDV or not SENHA_PDV:
         print("❌ ERRO CRÍTICO: Variáveis USUARIO_PDV e SENHA_PDV não foram encontradas nos Secrets!")
@@ -130,8 +130,8 @@ def baixar_dados_pdvpet():
             fuso_br = ZoneInfo("America/Sao_Paulo")
             data_hoje = datetime.now(fuso_br).strftime("%Y-%m-%d")
 
-            print(f"📅 Preenchendo as datas: {INICIO_P8} até {data_hoje}...")
-            page.fill('#DataDe', INICIO_P8)
+            print(f"📅 Preenchendo as datas: {INICIO_P9} até {data_hoje}...")
+            page.fill('#DataDe', INICIO_P9)
             page.fill('#DataAte', data_hoje)
             page.click('button[type="submit"]:has-text("Buscar")')
             page.wait_for_timeout(8000)
@@ -201,7 +201,7 @@ def gerar_pdf_filial(filial, meta_geral_batida, df_oportunidades_filial, df_prec
 
     # Cabeçalho
     elements.append(Paragraph(f"<b>Relatório de Oportunidades e Auditoria</b>", title_style))
-    elements.append(Paragraph(f"<b>Filial:</b> {filial} | <b>Período:</b> P9 | <b>Gerado em:</b> {datetime.now().strftime('%d/%m/%Y %H:%M')}", sub_style))
+    elements.append(Paragraph(f"<b>Filial:</b> {filial} | <b>Período:</b> {PERIODO_ATUAL} | <b>Gerado em:</b> {datetime.now().strftime('%d/%m/%Y %H:%M')}", sub_style))
 
     # SEÇÃO 1: OPORTUNIDADES DE LEITURA
     elements.append(Paragraph("1. Oportunidades de Leitura (Somente Categoria PENDENTES de Meta)", sec_style))
@@ -365,19 +365,20 @@ def processar_e_gerar_relatorios():
         axis=1
     )
 
-    df_p8 = df[(df['Data_Parsed'] >= INICIO_P8) & (df['Data_Parsed'] <= FIM_P8)]
-    df_p9 = df[(df['Data_Parsed'] >= INICIO_P9) & (df['Data_Parsed'] <= FIM_P9)]
+    # Filtragem dos Períodos P9 (Base) vs P10 (Atual)
+    df_p9  = df[(df['Data_Parsed'] >= INICIO_P9) & (df['Data_Parsed'] <= FIM_P9)]
+    df_p10 = df[(df['Data_Parsed'] >= INICIO_P10) & (df['Data_Parsed'] <= FIM_P10)]
 
-    # 1. Mapear Oportunidades Base (P8 vs P9)
-    p8_pares = df_p8[['Distribuidor', 'Cidade_Clean', 'Pdv_Com_Cidade', 'Item', 'Item_Nome']].drop_duplicates()
-    p9_pares = df_p9[['Distribuidor', 'Cidade_Clean', 'Pdv_Com_Cidade', 'Item', 'Item_Nome']].drop_duplicates()
+    # 1. Mapear Oportunidades Base (P9 vs P10)
+    p9_pares  = df_p9[['Distribuidor', 'Cidade_Clean', 'Pdv_Com_Cidade', 'Item', 'Item_Nome']].drop_duplicates()
+    p10_pares = df_p10[['Distribuidor', 'Cidade_Clean', 'Pdv_Com_Cidade', 'Item', 'Item_Nome']].drop_duplicates()
 
-    df_oportunidades = pd.merge(p8_pares, p9_pares, on=['Distribuidor', 'Cidade_Clean', 'Pdv_Com_Cidade', 'Item', 'Item_Nome'], how='left', indicator=True)
+    df_oportunidades = pd.merge(p9_pares, p10_pares, on=['Distribuidor', 'Cidade_Clean', 'Pdv_Com_Cidade', 'Item', 'Item_Nome'], how='left', indicator=True)
     df_oportunidades = df_oportunidades[df_oportunidades['_merge'] == 'left_only'].drop(columns=['_merge'])
 
-    # 2. Auditar Preços
+    # 2. Auditar Preços no P10
     alertas_preco = []
-    for _, row in df_p9.iterrows():
+    for _, row in df_p10.iterrows():
         chave = row['Chave_Preco']
         preco = row['Preco_Num']
         
@@ -400,7 +401,7 @@ def processar_e_gerar_relatorios():
 
     # 3. Processar, Gerar PDF e Enviar E-mail por Filial
     for distribuidor, metas_filial in METAS.items():
-        sub_a = df_p9[(df_p9['Distribuidor'] == distribuidor) & (df_p9['Status'] == 'Aprovado')]['Item'].value_counts().to_dict()
+        sub_a = df_p10[(df_p10['Distribuidor'] == distribuidor) & (df_p10['Status'] == 'Aprovado')]['Item'].value_counts().to_dict()
         
         categorias_pendentes = []
         meta_geral_batida = True
