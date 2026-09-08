@@ -43,7 +43,7 @@ EMAILS_PROMOTORES = {
 }
 
 # Configurações de Períodos (P9 vs P10)
-PERIODO_ATUAL = "P10"
+PERIODO_PADRAO = "P10"
 INICIO_P9  = "2026-08-10"
 FIM_P9     = "2026-09-06"
 INICIO_P10 = "2026-09-07"
@@ -59,8 +59,6 @@ CONFIGURACOES_PERIODOS = {
         }
     }
 }
-
-METAS = CONFIGURACOES_PERIODOS[PERIODO_ATUAL]["metas"]
 
 PRECOS_MAXIMOS = {
     'KiteKat Adulto Mix de Carnes - Small Bags 0,9Kg': 11.90,
@@ -192,7 +190,7 @@ def formatar_texto_por_tipo(item_nome, pdv_info, styles):
     return Paragraph(pdv_str, style_pdv), Paragraph(item_str, style_item)
 
 
-def gerar_pdf_filial(filial, meta_geral_batida, df_oportunidades_filial, df_precos_filial):
+def gerar_pdf_filial(filial, periodo_ativo, meta_geral_batida, df_oportunidades_filial, df_precos_filial):
     nome_arquivo = f"Relatorio_Oportunidades_{filial.replace(' ', '_').replace('-', '')}.pdf"
     caminho_pdf = os.path.join(PASTA_PROJETO, nome_arquivo)
     
@@ -213,7 +211,7 @@ def gerar_pdf_filial(filial, meta_geral_batida, df_oportunidades_filial, df_prec
 
     # Cabeçalho
     elements.append(Paragraph(f"<b>Relatório de Oportunidades e Auditoria</b>", title_style))
-    elements.append(Paragraph(f"<b>Filial:</b> {filial} | <b>Período:</b> {PERIODO_ATUAL} | <b>Gerado em:</b> {datetime.now().strftime('%d/%m/%Y %H:%M')}", sub_style))
+    elements.append(Paragraph(f"<b>Filial:</b> {filial} | <b>Período:</b> {periodo_ativo} | <b>Gerado em:</b> {datetime.now().strftime('%d/%m/%Y %H:%M')}", sub_style))
 
     # SEÇÃO 1: OPORTUNIDADES DE LEITURA
     elements.append(Paragraph("1. Oportunidades de Leitura (Somente Categoria PENDENTES de Meta)", sec_style))
@@ -342,14 +340,14 @@ def enviar_email(filial, caminho_pdf, tem_preco_pendente):
 # ==========================================
 # 4. PROCESSAMENTO DOS DADOS E EXECUÇÃO
 # ==========================================
-def processar_e_gerar_relatorios():
+def processar_e_gerar_relatorios(filial_escolhida="Todas", periodo_ativo="P10"):
     if not os.path.exists(CAMINHO_CSV_FINAL):
         sucesso = baixar_dados_pdvpet()
         if not sucesso or not os.path.exists(CAMINHO_CSV_FINAL):
             st.error("❌ Impossível prosseguir sem o arquivo CSV.")
             return
 
-    st.write("\n--- PROCESSANDO DADOS E GERANDO RELATÓRIOS ---")
+    st.write(f"\n--- PROCESSANDO DADOS (Período: {periodo_ativo}) ---")
     df = pd.read_csv(CAMINHO_CSV_FINAL, sep=';', encoding='latin1')
     
     df['Data_Parsed'] = pd.to_datetime(df['Data'].astype(str).str.split(' ').str[0], format='%d/%m/%Y', errors='coerce')
@@ -371,7 +369,7 @@ def processar_e_gerar_relatorios():
         axis=1
     )
     
-    # Chave corrigida exata para bater com PRECOS_MAXIMOS (Ex: "Whiskas Sabor CARNE - Small Bags 0,5Kg")
+    # Chave corrigida exata para bater com PRECOS_MAXIMOS
     df['Chave_Preco'] = df.apply(
         lambda r: f"{r['Item']} - {r['OpcaoEmbalagem_Clean']} {r['Embalagem_Clean']}".strip(),
         axis=1
@@ -416,8 +414,14 @@ def processar_e_gerar_relatorios():
                 })
     df_alertas_preco = pd.DataFrame(alertas_preco)
 
-    # 3. Processar, Gerar PDF e Enviar E-mail por Filial
-    for distribuidor, metas_filial in METAS.items():
+    # Pegar as metas do período configurado
+    metas_dict = CONFIGURACOES_PERIODOS.get(periodo_ativo, CONFIGURACOES_PERIODOS["P10"])["metas"]
+
+    # 3. Filtrar por filial se o usuário escolheu uma específica
+    filiais_para_processar = metas_dict.keys() if filial_escolhida == "Todas" else [filial_escolhida]
+
+    for distribuidor in filiais_para_processar:
+        metas_filial = metas_dict[distribuidor]
         sub_a = df_p10[(df_p10['Distribuidor'] == distribuidor) & (df_p10['Status'] == 'Aprovado')]['Item'].value_counts().to_dict()
         
         categorias_pendentes = []
@@ -446,7 +450,7 @@ def processar_e_gerar_relatorios():
         tem_pendente = not df_pr_filial.empty and any(df_pr_filial['Status'] != 'Cancelado')
 
         # Criação do arquivo de relatório
-        caminho_pdf_gerado = gerar_pdf_filial(distribuidor, meta_geral_batida, df_op_filial, df_pr_filial)
+        caminho_pdf_gerado = gerar_pdf_filial(distribuidor, periodo_ativo, meta_geral_batida, df_op_filial, df_pr_filial)
 
         # Disparo do e-mail contendo o anexo recém-gerado
         enviar_email(distribuidor, caminho_pdf_gerado, tem_pendente)
@@ -458,9 +462,37 @@ def processar_e_gerar_relatorios():
 st.set_page_config(page_title="Painel PDV Pet", page_icon="📊", layout="wide")
 
 st.title("📊 Painel de Automação PDV Pet")
-st.write("Clique no botão abaixo para rodar o processo de extração e envio dos relatórios.")
+st.write("Gerencie e execute os relatórios de oportunidades e auditoria de preços por filial.")
+
+st.sidebar.header("⚙️ Opções de Execução")
+
+# Opção de selecionar Período
+periodo_selecionado = st.sidebar.selectbox(
+    "Selecione o Período:", 
+    list(CONFIGURACOES_PERIODOS.keys())
+)
+
+# Opção de selecionar Filial específica ou todas
+lista_filiais = ["Todas"] + list(CONFIGURACOES_PERIODOS[periodo_selecionado]["metas"].keys())
+filial_selecionada = st.sidebar.selectbox(
+    "Filial:", 
+    lista_filiais
+)
+
+# Botão para forçar recarregamento do CSV se necessário
+forcar_download = st.sidebar.checkbox("Forçar novo download do PDV Pet", value=False)
+
+if st.sidebar.button("🗑️ Limpar Cache/CSV Local"):
+    if os.path.exists(CAMINHO_CSV_FINAL):
+        os.remove(CAMINHO_CSV_FINAL)
+        st.sidebar.success("Cache limpo com sucesso!")
+
+st.write(f"**Configuração atual selecionada:** Filial: `{filial_selecionada}` | Período: `{periodo_selecionado}`")
 
 if st.button("🚀 Iniciar Automação", type="primary"):
-    with st.spinner("Processando..."):
-        processar_e_gerar_relatorios()
-    st.success("Processo concluído!")
+    if forcar_download and os.path.exists(CAMINHO_CSV_FINAL):
+        os.remove(CAMINHO_CSV_FINAL)
+        
+    with st.spinner("Executando extração e geração de relatórios..."):
+        processar_e_gerar_relatorios(filial_escolhida=filial_selecionada, periodo_ativo=periodo_selecionado)
+    st.success("Processo concluído com sucesso!")
