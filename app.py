@@ -103,7 +103,14 @@ def baixar_dados_pdvpet():
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=True,
-            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
+            args=[
+                "--no-sandbox", 
+                "--disable-setuid-sandbox", 
+                "--disable-dev-shm-usage",
+                "--disable-gpu",
+                "--no-zygote",
+                "--single-process"
+            ]
         )
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -291,13 +298,17 @@ def gerar_pdf_filial(filial, periodo_ativo, meta_geral_batida, df_oportunidades_
 # ==========================================
 # 3. DISPARO DE E-MAILS
 # ==========================================
-def enviar_email(filial, caminho_pdf, tem_preco_pendente):
+def enviar_email(filial, caminho_pdf, tem_preco_pendente, apenas_benedito=False):
     if not EMAIL_REMETENTE or not SENHA_EMAIL:
         st.error(f"❌ ERRO CRÍTICO: Variáveis EMAIL_REMETENTE ou SENHA_EMAIL não foram configuradas nos Secrets!")
         return
 
     senha_limpa = SENHA_EMAIL.replace(" ", "")
-    destinatarios = list(set(EMAILS_MEUS + EMAILS_PROMOTORES.get(filial, [])))
+    
+    if apenas_benedito:
+        destinatarios = EMAILS_MEUS
+    else:
+        destinatarios = list(set(EMAILS_MEUS + EMAILS_PROMOTORES.get(filial, [])))
 
     msg = MIMEMultipart()
     msg['From'] = EMAIL_REMETENTE
@@ -340,7 +351,7 @@ def enviar_email(filial, caminho_pdf, tem_preco_pendente):
 # ==========================================
 # 4. PROCESSAMENTO DOS DADOS E EXECUÇÃO
 # ==========================================
-def processar_e_gerar_relatorios(filial_escolhida="Todas", periodo_ativo="P10"):
+def processar_e_gerar_relatorios(filial_escolhida="Todas", periodo_ativo="P10", apenas_benedito=False):
     if not os.path.exists(CAMINHO_CSV_FINAL):
         sucesso = baixar_dados_pdvpet()
         if not sucesso or not os.path.exists(CAMINHO_CSV_FINAL):
@@ -363,19 +374,16 @@ def processar_e_gerar_relatorios(filial_escolhida="Todas", periodo_ativo="P10"):
     df['OpcaoEmbalagem_Clean'] = df['OpcaoEmbalagem'].fillna('')
     df['Embalagem_Clean'] = df['Embalagem'].fillna('')
     
-    # Nome para exibição nas tabelas
     df['Item_Nome'] = df.apply(
         lambda r: f"{r['Item']} - {r['OpcaoEmbalagem_Clean']}" if r['OpcaoEmbalagem_Clean'] != '' else str(r['Item']), 
         axis=1
     )
     
-    # Chave corrigida exata para bater com PRECOS_MAXIMOS
     df['Chave_Preco'] = df.apply(
         lambda r: f"{r['Item']} - {r['OpcaoEmbalagem_Clean']} {r['Embalagem_Clean']}".strip(),
         axis=1
     )
 
-    # Filtragem dos Períodos P9 (Base) vs P10 (Atual)
     dt_inicio_p9 = pd.to_datetime(INICIO_P9)
     dt_fim_p9 = pd.to_datetime(FIM_P9)
     dt_inicio_p10 = pd.to_datetime(INICIO_P10)
@@ -384,14 +392,12 @@ def processar_e_gerar_relatorios(filial_escolhida="Todas", periodo_ativo="P10"):
     df_p9  = df[(df['Data_Parsed'] >= dt_inicio_p9) & (df['Data_Parsed'] <= dt_fim_p9)]
     df_p10 = df[(df['Data_Parsed'] >= dt_inicio_p10) & (df['Data_Parsed'] <= dt_fim_p10)]
 
-    # 1. Mapear Oportunidades Base (P9 vs P10)
     p9_pares  = df_p9[['Distribuidor', 'Cidade_Clean', 'Pdv_Com_Cidade', 'Item', 'Item_Nome']].drop_duplicates()
     p10_pares = df_p10[['Distribuidor', 'Cidade_Clean', 'Pdv_Com_Cidade', 'Item', 'Item_Nome']].drop_duplicates()
 
     df_oportunidades = pd.merge(p9_pares, p10_pares, on=['Distribuidor', 'Cidade_Clean', 'Pdv_Com_Cidade', 'Item', 'Item_Nome'], how='left', indicator=True)
     df_oportunidades = df_oportunidades[df_oportunidades['_merge'] == 'left_only'].drop(columns=['_merge'])
 
-    # 2. Auditar Preços no P10
     alertas_preco = []
     for _, row in df_p10.iterrows():
         chave = row['Chave_Preco']
@@ -414,10 +420,7 @@ def processar_e_gerar_relatorios(filial_escolhida="Todas", periodo_ativo="P10"):
                 })
     df_alertas_preco = pd.DataFrame(alertas_preco)
 
-    # Pegar as metas do período configurado
     metas_dict = CONFIGURACOES_PERIODOS.get(periodo_ativo, CONFIGURACOES_PERIODOS["P10"])["metas"]
-
-    # 3. Filtrar por filial se o usuário escolheu uma específica
     filiais_para_processar = metas_dict.keys() if filial_escolhida == "Todas" else [filial_escolhida]
 
     for distribuidor in filiais_para_processar:
@@ -440,7 +443,6 @@ def processar_e_gerar_relatorios(filial_escolhida="Todas", periodo_ativo="P10"):
 
         df_pr_filial = df_alertas_preco[df_alertas_preco['Distribuidor'] == distribuidor].copy() if not df_alertas_preco.empty else pd.DataFrame()
 
-        # Exclusão específica de Ribeirão Preto
         if distribuidor == 'MINASSAL LTDA - SAO JOAO DA BOA VISTA':
             if not df_op_filial.empty:
                 df_op_filial = df_op_filial[~df_op_filial['Cidade_Clean'].str.upper().str.contains("RIBEIRAO PRETO|RIBEIRÃO PRETO", na=False)]
@@ -449,11 +451,8 @@ def processar_e_gerar_relatorios(filial_escolhida="Todas", periodo_ativo="P10"):
 
         tem_pendente = not df_pr_filial.empty and any(df_pr_filial['Status'] != 'Cancelado')
 
-        # Criação do arquivo de relatório
         caminho_pdf_gerado = gerar_pdf_filial(distribuidor, periodo_ativo, meta_geral_batida, df_op_filial, df_pr_filial)
-
-        # Disparo do e-mail contendo o anexo recém-gerado
-        enviar_email(distribuidor, caminho_pdf_gerado, tem_pendente)
+        enviar_email(distribuidor, caminho_pdf_gerado, tem_pendente, apenas_benedito=apenas_benedito)
 
 
 # ==========================================
@@ -466,20 +465,20 @@ st.write("Gerencie e execute os relatórios de oportunidades e auditoria de pre�
 
 st.sidebar.header("⚙️ Opções de Execução")
 
-# Opção de selecionar Período
 periodo_selecionado = st.sidebar.selectbox(
     "Selecione o Período:", 
     list(CONFIGURACOES_PERIODOS.keys())
 )
 
-# Opção de selecionar Filial específica ou todas
 lista_filiais = ["Todas"] + list(CONFIGURACOES_PERIODOS[periodo_selecionado]["metas"].keys())
 filial_selecionada = st.sidebar.selectbox(
     "Filial:", 
     lista_filiais
 )
 
-# Botão para forçar recarregamento do CSV se necessário
+# Nova opção solicitada: Enviar apenas para o Benedito
+enviar_apenas_para_mim = st.sidebar.checkbox("Enviar e-mails APENAS para mim (Benedito)", value=False)
+
 forcar_download = st.sidebar.checkbox("Forçar novo download do PDV Pet", value=False)
 
 if st.sidebar.button("🗑️ Limpar Cache/CSV Local"):
@@ -487,12 +486,16 @@ if st.sidebar.button("🗑️ Limpar Cache/CSV Local"):
         os.remove(CAMINHO_CSV_FINAL)
         st.sidebar.success("Cache limpo com sucesso!")
 
-st.write(f"**Configuração atual selecionada:** Filial: `{filial_selecionada}` | Período: `{periodo_selecionado}`")
+st.write(f"**Configuração atual:** Filial: `{filial_selecionada}` | Período: `{periodo_selecionado}` | Apenas Benedito: `{enviar_apenas_para_mim}`")
 
 if st.button("🚀 Iniciar Automação", type="primary"):
     if forcar_download and os.path.exists(CAMINHO_CSV_FINAL):
         os.remove(CAMINHO_CSV_FINAL)
         
     with st.spinner("Executando extração e geração de relatórios..."):
-        processar_e_gerar_relatorios(filial_escolhida=filial_selecionada, periodo_ativo=periodo_selecionado)
+        processar_e_gerar_relatorios(
+            filial_escolhida=filial_selecionada, 
+            periodo_ativo=periodo_selecionado, 
+            apenas_benedito=enviar_apenas_para_mim
+        )
     st.success("Processo concluído com sucesso!")
