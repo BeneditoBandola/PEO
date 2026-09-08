@@ -10,7 +10,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
 
-# Tenta instalar o executável do Chromium silenciosamente caso não esteja presente no container
+# Tenta instalar o executável do Chromium silenciosamente no ambiente da nuvem
 try:
     subprocess.run(["playwright", "install", "chromium"], check=False)
 except Exception:
