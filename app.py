@@ -1,5 +1,6 @@
 import os
 import smtplib
+import subprocess
 import pandas as pd
 import streamlit as st
 from datetime import datetime
@@ -7,8 +8,14 @@ from zoneinfo import ZoneInfo
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
-from playwright.sync_api import sync_playwright
 
+# Garante a instalação do Chromium no ambiente Streamlit
+try:
+    subprocess.run(["playwright", "install", "chromium"], check=True)
+except Exception as e:
+    print(f"Aviso na instalação do Chromium: {e}")
+
+from playwright.sync_api import sync_playwright
 from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
@@ -181,7 +188,7 @@ def formatar_texto_por_tipo(item_nome, pdv_info, styles):
     return Paragraph(pdv_str, style_pdv), Paragraph(item_str, style_item)
 
 
-def gerar_pdf_filial(filial, meta_geral_batida, df_oportunidades_filial, df_precos_filial):
+def gerar_pdf_filial(filial, meta_geral_batida, df_oportunidades_filial, df_precos_filial, tipo_relatorio="Completo (Oportunidades + Preços)"):
     nome_arquivo = f"Relatorio_Oportunidades_{filial.replace(' ', '_').replace('-', '')}.pdf"
     caminho_pdf = os.path.join(PASTA_PROJETO, nome_arquivo)
     
@@ -201,78 +208,80 @@ def gerar_pdf_filial(filial, meta_geral_batida, df_oportunidades_filial, df_prec
     elements = []
 
     # Cabeçalho
-    elements.append(Paragraph(f"<b>Relatório de Oportunidades e Auditoria</b>", title_style))
+    elements.append(Paragraph(f"<b>Relatório de Acompanhamento - PDV Pet</b>", title_style))
     elements.append(Paragraph(f"<b>Filial:</b> {filial} | <b>Período:</b> {PERIODO_ATUAL} | <b>Gerado em:</b> {datetime.now().strftime('%d/%m/%Y %H:%M')}", sub_style))
 
     # SEÇÃO 1: OPORTUNIDADES DE LEITURA
-    elements.append(Paragraph("1. Oportunidades de Leitura (Somente Categoria PENDENTES de Meta)", sec_style))
-    
-    if meta_geral_batida:
-        elements.append(Paragraph("🏆 TODAS AS METAS BATIDAS! Nenhuma oportunidade pendente.", alert_style))
-    else:
-        if df_oportunidades_filial.empty:
-            elements.append(Paragraph("✅ Nenhuma oportunidade pendente para as metas em aberto.", styles['Normal']))
+    if tipo_relatorio in ["Completo (Oportunidades + Preços)", "Apenas Oportunidades de Leitura"]:
+        elements.append(Paragraph("1. Oportunidades de Leitura (Somente Categoria PENDENTES de Meta)", sec_style))
+        
+        if meta_geral_batida:
+            elements.append(Paragraph("🏆 TODAS AS METAS BATIDAS! Nenhuma oportunidade pendente.", alert_style))
         else:
-            dados_tabela = [["PDV / Cidade", "Item / Opção Embalagem"]]
-            for _, row in df_oportunidades_filial.iterrows():
-                p_pdv, p_item = formatar_texto_por_tipo(row['Item_Nome'], row['Pdv_Com_Cidade'], styles)
-                dados_tabela.append([p_pdv, p_item])
+            if df_oportunidades_filial.empty:
+                elements.append(Paragraph("✅ Nenhuma oportunidade pendente para as metas em aberto.", styles['Normal']))
+            else:
+                dados_tabela = [["PDV / Cidade", "Item / Opção Embalagem"]]
+                for _, row in df_oportunidades_filial.iterrows():
+                    p_pdv, p_item = formatar_texto_por_tipo(row['Item_Nome'], row['Pdv_Com_Cidade'], styles)
+                    dados_tabela.append([p_pdv, p_item])
 
-            t = Table(dados_tabela, colWidths=[250, 310])
-            t.setStyle(TableStyle([
-                ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#f6f8fa')),
-                ('TEXTCOLOR', (0,0), (-1,0), colors.HexColor('#24292f')),
+                t = Table(dados_tabela, colWidths=[250, 310])
+                t.setStyle(TableStyle([
+                    ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#f6f8fa')),
+                    ('TEXTCOLOR', (0,0), (-1,0), colors.HexColor('#24292f')),
+                    ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
+                    ('BOTTOMPADDING', (0,0), (-1,0), 5),
+                    ('TOPPADDING', (0,0), (-1,0), 5),
+                    ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#d0d7de')),
+                ]))
+                elements.append(t)
+
+        elements.append(Spacer(1, 12))
+
+    # SEÇÃO 2: DIVERGÊNCIAS DE PREÇO
+    if tipo_relatorio in ["Completo (Oportunidades + Preços)", "Apenas Correção de Preços"]:
+        elements.append(Paragraph("2. Auditoria de Preço Máximo (Small Bags)", sec_style))
+
+        if df_precos_filial.empty:
+            elements.append(Paragraph("✅ Nenhum preço acima do teto foi detectado.", styles['Normal']))
+        else:
+            tem_pendente = any(df_precos_filial['Status'] != 'Cancelado')
+            if tem_pendente:
+                elements.append(Paragraph("⚠️ <b>ATENÇÃO: Existem itens lidos acima do teto que precisam de correção no PDV!</b>", style_pendente))
+                elements.append(Spacer(1, 4))
+                
+            dados_preco = [["PDV / Cidade", "Produto / Embalagem", "Lido (R$)", "Teto (R$)", "Situação / Observação"]]
+            for _, row in df_precos_filial.iterrows():
+                st_val = str(row['Status'])
+                data_canc = str(row['DataCancelamento']) if pd.notnull(row['DataCancelamento']) else str(row['Data'])
+                
+                if st_val == 'Cancelado':
+                    txt_situacao = f"✅ Corrigido/Cancelado<br/><font size=6.5 color='#57606a'>em {data_canc}</font>"
+                    p_status = Paragraph(txt_situacao, style_corrigido)
+                else:
+                    txt_situacao = f"⚠️ <b>PENDENTE DE CORREÇÃO</b><br/><font size=6.5 color='#991b1b'>Lido em {row['Data']}</font>"
+                    p_status = Paragraph(txt_situacao, style_pendente)
+                    
+                dados_preco.append([
+                    Paragraph(str(row['Pdv_Com_Cidade']), style_pdv),
+                    Paragraph(str(row['Item_Nome']), style_prod),
+                    f"R$ {row['Preco_Lido']:.2f}",
+                    f"R$ {row['Preco_Maximo']:.2f}",
+                    p_status
+                ])
+
+            t_preco = Table(dados_preco, colWidths=[150, 160, 55, 55, 140])
+            t_preco.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#ffebe9')),
+                ('TEXTCOLOR', (0,0), (-1,0), colors.HexColor('#cf222e')),
                 ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
                 ('BOTTOMPADDING', (0,0), (-1,0), 5),
                 ('TOPPADDING', (0,0), (-1,0), 5),
-                ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#d0d7de')),
+                ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
+                ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#ffc1c0')),
             ]))
-            elements.append(t)
-
-    elements.append(Spacer(1, 12))
-
-    # SEÇÃO 2: DIVERGÊNCIAS DE PREÇO COM STATUS
-    elements.append(Paragraph("2. Auditoria de Preço Máximo (Small Bags)", sec_style))
-
-    if df_precos_filial.empty:
-        elements.append(Paragraph("✅ Nenhum preço acima do teto foi detectado.", styles['Normal']))
-    else:
-        tem_pendente = any(df_precos_filial['Status'] != 'Cancelado')
-        if tem_pendente:
-            elements.append(Paragraph("⚠️ <b>ATENÇÃO: Existem itens lidos acima do teto que precisam de correção no PDV!</b>", style_pendente))
-            elements.append(Spacer(1, 4))
-            
-        dados_preco = [["PDV / Cidade", "Produto / Embalagem", "Lido (R$)", "Teto (R$)", "Situação / Observação"]]
-        for _, row in df_precos_filial.iterrows():
-            st_val = str(row['Status'])
-            data_canc = str(row['DataCancelamento']) if pd.notnull(row['DataCancelamento']) else str(row['Data'])
-            
-            if st_val == 'Cancelado':
-                txt_situacao = f"✅ Corrigido/Cancelado<br/><font size=6.5 color='#57606a'>em {data_canc}</font>"
-                p_status = Paragraph(txt_situacao, style_corrigido)
-            else:
-                txt_situacao = f"⚠️ <b>PENDENTE DE CORREÇÃO</b><br/><font size=6.5 color='#991b1b'>Lido em {row['Data']}</font>"
-                p_status = Paragraph(txt_situacao, style_pendente)
-                
-            dados_preco.append([
-                Paragraph(str(row['Pdv_Com_Cidade']), style_pdv),
-                Paragraph(str(row['Item_Nome']), style_prod),
-                f"R$ {row['Preco_Lido']:.2f}",
-                f"R$ {row['Preco_Maximo']:.2f}",
-                p_status
-            ])
-
-        t_preco = Table(dados_preco, colWidths=[150, 160, 55, 55, 140])
-        t_preco.setStyle(TableStyle([
-            ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#ffebe9')),
-            ('TEXTCOLOR', (0,0), (-1,0), colors.HexColor('#cf222e')),
-            ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-            ('BOTTOMPADDING', (0,0), (-1,0), 5),
-            ('TOPPADDING', (0,0), (-1,0), 5),
-            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-            ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#ffc1c0')),
-        ]))
-        elements.append(t_preco)
+            elements.append(t_preco)
 
     doc.build(elements)
     st.text(f"📄 PDF Gerado com Sucesso: {nome_arquivo}")
@@ -335,7 +344,7 @@ def enviar_email(filial, caminho_pdf, tem_preco_pendente, apenas_meus_emails=Fal
 # ==========================================
 # 4. PROCESSAMENTO DOS DADOS E EXECUÇÃO
 # ==========================================
-def processar_e_gerar_relatorios(apenas_meus_emails=False, forcar_download=True):
+def processar_e_gerar_relatorios(apenas_meus_emails=False, forcar_download=True, tipo_relatorio="Completo (Oportunidades + Preços)"):
     if forcar_download or not os.path.exists(CAMINHO_CSV_FINAL):
         sucesso = baixar_dados_pdvpet()
         if not sucesso or not os.path.exists(CAMINHO_CSV_FINAL):
@@ -426,7 +435,7 @@ def processar_e_gerar_relatorios(apenas_meus_emails=False, forcar_download=True)
 
         tem_pendente = not df_pr_filial.empty and any(df_pr_filial['Status'] != 'Cancelado')
 
-        caminho_pdf_gerado = gerar_pdf_filial(distribuidor, meta_geral_batida, df_op_filial, df_pr_filial)
+        caminho_pdf_gerado = gerar_pdf_filial(distribuidor, meta_geral_batida, df_op_filial, df_pr_filial, tipo_relatorio=tipo_relatorio)
         enviar_email(distribuidor, caminho_pdf_gerado, tem_pendente, apenas_meus_emails=apenas_meus_emails)
 
 
@@ -449,6 +458,12 @@ modo_envio = st.sidebar.radio(
     index=0
 )
 
+tipo_relatorio = st.sidebar.radio(
+    "Conteúdo do Relatório PDF:",
+    options=["Completo (Oportunidades + Preços)", "Apenas Oportunidades de Leitura", "Apenas Correção de Preços"],
+    index=0
+)
+
 forcar_download = st.sidebar.checkbox(
     "Forçar novo download do PDV Pet",
     value=True,
@@ -466,6 +481,7 @@ col1, col2 = st.columns(2)
 with col1:
     st.subheader("📋 Resumo da Configuração")
     st.write(f"**Modo de Envio:** {'🔒 Teste/Interno (Somente Benedito)' if modo_envio == 'Apenas Benedito' else '📢 Produção (Benedito + Promotores)'}")
+    st.write(f"**Conteúdo Escolhido:** {tipo_relatorio}")
     st.write(f"**Download Automático:** {'Ativado' if forcar_download else 'Usar CSV Local se existir'}")
 
 with col2:
@@ -483,7 +499,8 @@ if st.button("🚀 Iniciar Processamento e Envio", type="primary", use_container
     with st.spinner("Executando automação..."):
         processar_e_gerar_relatorios(
             apenas_meus_emails=apenas_benedito,
-            forcar_download=forcar_download
+            forcar_download=forcar_download,
+            tipo_relatorio=tipo_relatorio
         )
         
     st.success("🎉 Processo finalizado com sucesso!")
