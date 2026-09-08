@@ -10,24 +10,17 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
 
+# Tenta instalar o executável do Chromium silenciosamente caso não esteja presente no container
+try:
+    subprocess.run(["playwright", "install", "chromium"], check=False)
+except Exception:
+    pass
+
+from playwright.sync_api import sync_playwright
 from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
-
-# ==========================================
-# GARANTIR NAVEGADOR PLAYWRIGHT NO STREAMLIT
-# ==========================================
-def instalar_playwright():
-    try:
-        # Instala o navegador chromium e suas dependências de sistema se não existirem
-        subprocess.run(["playwright", "install", "chromium"], check=True)
-        subprocess.run(["playwright", "install-deps", "chromium"], check=True)
-    except Exception as e:
-        st.warning(f"Aviso na instalação do Playwright: {e}")
-
-instalar_playwright()
-from playwright.sync_api import sync_playwright
 
 # ==========================================
 # CONFIGURAÇÕES E VARIÁVEIS DE AMBIENTE
@@ -49,7 +42,7 @@ EMAILS_PROMOTORES = {
     "MINASSAL LTDA - JUIZ DE FORA": ["fernandaferreira_jf@yahoo.com.br", "madallareis66@gmail.com"]
 }
 
-# Configurações de Períodos
+# Configurações de Períodos (P9 vs P10)
 PERIODO_ATUAL = "P10"
 INICIO_P9  = "2026-08-10"
 FIM_P9     = "2026-09-06"
@@ -111,7 +104,10 @@ def baixar_dados_pdvpet():
 
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+            browser = p.chromium.launch(
+                headless=True,
+                args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
+            )
             context = browser.new_context(accept_downloads=True)
             page = context.new_page()
 
