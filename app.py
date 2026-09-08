@@ -1,6 +1,5 @@
 import os
 import smtplib
-import subprocess
 import pandas as pd
 import streamlit as st
 from datetime import datetime
@@ -8,12 +7,6 @@ from zoneinfo import ZoneInfo
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
-
-# Garante a instalação do Chromium no ambiente Streamlit
-try:
-    subprocess.run(["playwright", "install", "chromium"], check=True)
-except Exception as e:
-    print(f"Aviso na instalação do Chromium: {e}")
 
 from playwright.sync_api import sync_playwright
 from reportlab.lib.pagesizes import letter
@@ -102,10 +95,22 @@ def baixar_dados_pdvpet():
         return False
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=True,
-            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"]
-        )
+        # Detecta se existe o binário do Chromium instalado pelo Linux do Streamlit Cloud
+        exec_path = "/usr/bin/chromium" if os.path.exists("/usr/bin/chromium") else None
+        
+        launch_args = [
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-gpu",
+            "--single-process"
+        ]
+
+        if exec_path:
+            browser = p.chromium.launch(executable_path=exec_path, headless=True, args=launch_args)
+        else:
+            browser = p.chromium.launch(headless=True, args=launch_args)
+
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             viewport={"width": 1280, "height": 800}
@@ -135,8 +140,11 @@ def baixar_dados_pdvpet():
             
             page.wait_for_selector('#DataDe', timeout=60000)
 
-            fuso_br = ZoneInfo("America/Sao_Paulo")
-            data_hoje = datetime.now(fuso_br).strftime("%Y-%m-%d")
+            try:
+                fuso_br = ZoneInfo("America/Sao_Paulo")
+                data_hoje = datetime.now(fuso_br).strftime("%Y-%m-%d")
+            except Exception:
+                data_hoje = datetime.now().strftime("%Y-%m-%d")
 
             st.text(f"📅 Preenchendo as datas: {INICIO_P9} até {data_hoje}...")
             page.fill('#DataDe', INICIO_P9)
@@ -449,7 +457,6 @@ st.caption(f"Período Vigente: **{PERIODO_ATUAL}** | Comparação: **P9** ({INIC
 
 st.markdown("---")
 
-# Barra Lateral (Sidebar) com as opções de controle
 st.sidebar.header("⚙️ Opções de Execução")
 
 modo_envio = st.sidebar.radio(
@@ -475,7 +482,6 @@ st.sidebar.write("**E-mails Cadastrados (Benedito):**")
 for email in EMAILS_MEUS:
     st.sidebar.text(f"• {email}")
 
-# Painel Principal
 col1, col2 = st.columns(2)
 
 with col1:
