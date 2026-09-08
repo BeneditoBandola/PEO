@@ -1,5 +1,6 @@
 streamlit
 pandas
-playwright
+selenium
+webdriver-manager
 reportlab
 tzdata
