@@ -1,26 +1,24 @@
 import os
 import smtplib
 import pandas as pd
-import streamlit as st
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
-
-# Tenta instalar o Playwright silenciosamente na nuvem se necessário
-try:
-    from playwright.sync_api import sync_playwright
-except ImportError:
-    import subprocess
-    subprocess.run(["pip", "install", "playwright"], check=True)
-    subprocess.run(["playwright", "install", "chromium"], check=True)
-    from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright
+import streamlit as st
 
 from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+
+# Configuração da Página
+st.set_page_config(page_title="Automação PDV Pet", page_icon="🐾", layout="centered")
+
+st.title("🐾 Painel de Controle - PDV Pet")
+st.write("Execute a extração e escolha para quem deseja enviar os relatórios e quais filtros aplicar.")
 
 # ==========================================
 # CONFIGURAÇÕES E VARIÁVEIS DE AMBIENTE
@@ -42,8 +40,7 @@ EMAILS_PROMOTORES = {
     "MINASSAL LTDA - JUIZ DE FORA": ["fernandaferreira_jf@yahoo.com.br", "madallareis66@gmail.com"]
 }
 
-# Configurações de Períodos (P9 vs P10)
-PERIODO_PADRAO = "P10"
+PERIODO_ATUAL = "P10"
 INICIO_P9  = "2026-08-10"
 FIM_P9     = "2026-09-06"
 INICIO_P10 = "2026-09-07"
@@ -59,6 +56,8 @@ CONFIGURACOES_PERIODOS = {
         }
     }
 }
+
+METAS = CONFIGURACOES_PERIODOS[PERIODO_ATUAL]["metas"]
 
 PRECOS_MAXIMOS = {
     'KiteKat Adulto Mix de Carnes - Small Bags 0,9Kg': 11.90,
@@ -89,15 +88,27 @@ PRECOS_MAXIMOS = {
 PASTA_PROJETO = os.path.dirname(os.path.abspath(__file__))
 CAMINHO_CSV_FINAL = os.path.join(PASTA_PROJETO, "historico_p9_p10.csv")
 
+# ==========================================
+# PAINEL LATERAL DE FILTROS E OPÇÕES
+# ==========================================
+st.sidebar.header("Filtros de Envio e Execução")
+
+filial_selecionada = st.sidebar.selectbox(
+    "Filial para Processar:", 
+    ["Todas"] + list(METAS.keys())
+)
+
+enviar_apenas_para_mim = st.sidebar.checkbox("Enviar apenas para o meu e-mail (Teste)", value=True)
+
+incluir_oportunidades = st.sidebar.checkbox("Incluir Seção de Oportunidades", value=True)
+incluir_precos = st.sidebar.checkbox("Incluir Seção de Preços Máximos", value=True)
 
 # ==========================================
 # 1. DOWNLOAD DOS DADOS DO PDV PET
 # ==========================================
 def baixar_dados_pdvpet():
-    st.write(f"\n--- INICIANDO DOWNLOAD DO HISTÓRICO (P9 e P10) ---")
-    
     if not USUARIO_PDV or not SENHA_PDV:
-        st.error("❌ ERRO CRÍTICO: Variáveis USUARIO_PDV e SENHA_PDV não foram encontradas nos Secrets!")
+        st.error("❌ ERRO CRÍTICO: Variáveis USUARIO_PDV e SENHA_PDV não encontradas nos Secrets!")
         return False
 
     with sync_playwright() as p:
@@ -119,10 +130,10 @@ def baixar_dados_pdvpet():
         page = context.new_page()
 
         try:
-            st.text("🔗 Acessando o site PDV Pet...")
+            st.info("🔗 Acessando o site PDV Pet...")
             page.goto("https://www.pdvpet.com.br/", timeout=60000, wait_until="networkidle")
 
-            st.text("🔑 Preenchendo dados de login...")
+            st.info("🔑 Preenchendo dados de login...")
             page.fill('input[type="text"], input[name*="user"], input[name*="cpf"], input[name*="login"]', USUARIO_PDV)
             page.fill('input[type="password"]', SENHA_PDV)
 
@@ -131,29 +142,24 @@ def baixar_dados_pdvpet():
             except Exception:
                 page.keyboard.press("Enter")
 
-            st.text("⏳ Aguardando confirmação do login...")
             page.wait_for_load_state("networkidle")
             page.wait_for_timeout(3000)
 
-            st.text("📋 Navegando até a aba de Questionários...")
+            st.info("📋 Navegando até a aba de Questionários...")
             page.wait_for_selector('text=/Questionários|QUESTIONÁRIOS/i', timeout=60000)
             page.click('text=/Questionários|QUESTIONÁRIOS/i')
             
             page.wait_for_selector('#DataDe', timeout=60000)
 
-            try:
-                fuso_br = ZoneInfo("America/Sao_Paulo")
-                data_hoje = datetime.now(fuso_br).strftime("%Y-%m-%d")
-            except Exception:
-                data_hoje = datetime.now().strftime("%Y-%m-%d")
+            fuso_br = ZoneInfo("America/Sao_Paulo")
+            data_hoje = datetime.now(fuso_br).strftime("%Y-%m-%d")
 
-            st.text(f"📅 Preenchendo as datas: {INICIO_P9} até {data_hoje}...")
             page.fill('#DataDe', INICIO_P9)
             page.fill('#DataAte', data_hoje)
             page.click('button[type="submit"]:has-text("Buscar")')
             page.wait_for_timeout(8000)
 
-            st.text("⏳ Baixando o relatório CSV...")
+            st.info("⏳ Baixando o relatório CSV...")
             with page.expect_download(timeout=60000) as download_info:
                 page.click('button.btn-outline-success:has-text("Exportar")')
                 try:
@@ -167,37 +173,15 @@ def baixar_dados_pdvpet():
             return True
 
         except Exception as e:
-            st.error(f"❌ OCORREU UM ERRO DURANTE A NAVEGAÇÃO/DOWNLOAD: {e}")
+            st.error(f"❌ OCORREU UM ERRO DURANTE A NAVEGAÇÃO: {e}")
             return False
         finally:
             browser.close()
 
-
 # ==========================================
 # 2. GERADOR DE PDF
 # ==========================================
-def formatar_texto_por_tipo(item_nome, pdv_info, styles):
-    item_str = str(item_nome)
-    pdv_str = str(pdv_info)
-    
-    if "Small Bags" in item_str:
-        cor = "#0056b3"
-    elif "Ponto Extra" in item_str:
-        cor = "#6f42c1"
-    elif "Combo" in item_str:
-        cor = "#d97706"
-    elif "Sheba" in item_str:
-        cor = "#059669"
-    else:
-        cor = "#24292f"
-
-    style_pdv = ParagraphStyle('PdvStyle', parent=styles['Normal'], fontSize=8.5, leading=10.5, textColor=colors.HexColor('#24292f'))
-    style_item = ParagraphStyle('ItemStyle', parent=styles['Normal'], fontSize=8.5, leading=10.5, textColor=colors.HexColor(cor), fontName='Helvetica-Bold')
-
-    return Paragraph(pdv_str, style_pdv), Paragraph(item_str, style_item)
-
-
-def gerar_pdf_filial(filial, periodo_ativo, meta_geral_batida, df_oportunidades_filial, df_precos_filial):
+def gerar_pdf_filial(filial, meta_geral_batida, df_oportunidades_filial, df_precos_filial, usar_oportunidades, usar_precos):
     nome_arquivo = f"Relatorio_Oportunidades_{filial.replace(' ', '_').replace('-', '')}.pdf"
     caminho_pdf = os.path.join(PASTA_PROJETO, nome_arquivo)
     
@@ -215,97 +199,74 @@ def gerar_pdf_filial(filial, periodo_ativo, meta_geral_batida, df_oportunidades_
     style_pdv = ParagraphStyle('StylePdv', parent=styles['Normal'], fontSize=8, leading=10, textColor=colors.HexColor('#1f2937'))
 
     elements = []
-
-    # Cabeçalho
     elements.append(Paragraph(f"<b>Relatório de Oportunidades e Auditoria</b>", title_style))
-    elements.append(Paragraph(f"<b>Filial:</b> {filial} | <b>Período:</b> {periodo_ativo} | <b>Gerado em:</b> {datetime.now().strftime('%d/%m/%Y %H:%M')}", sub_style))
+    elements.append(Paragraph(f"<b>Filial:</b> {filial} | <b>Período:</b> {PERIODO_ATUAL} | <b>Gerado em:</b> {datetime.now().strftime('%d/%m/%Y %H:%M')}", sub_style))
 
-    # SEÇÃO 1: OPORTUNIDADES DE LEITURA
-    elements.append(Paragraph("1. Oportunidades de Leitura (Somente Categoria PENDENTES de Meta)", sec_style))
-    
-    if meta_geral_batida:
-        elements.append(Paragraph("🏆 TODAS AS METAS BATIDAS! Nenhuma oportunidade pendente.", alert_style))
-    else:
-        if df_oportunidades_filial.empty:
-            elements.append(Paragraph("✅ Nenhuma oportunidade pendente para as metas em aberto.", styles['Normal']))
+    # SEÇÃO 1: OPORTUNIDADES (Se marcada no filtro)
+    if usar_oportunidades:
+        elements.append(Paragraph("1. Oportunidades de Leitura (Somente Categoria PENDENTES de Meta)", sec_style))
+        if meta_geral_batida:
+            elements.append(Paragraph("🏆 TODAS AS METAS BATIDAS! Nenhuma oportunidade pendente.", alert_style))
         else:
-            dados_tabela = [["PDV / Cidade", "Item / Opção Embalagem"]]
-            for _, row in df_oportunidades_filial.iterrows():
-                p_pdv, p_item = formatar_texto_por_tipo(row['Item_Nome'], row['Pdv_Com_Cidade'], styles)
-                dados_tabela.append([p_pdv, p_item])
-
-            t = Table(dados_tabela, colWidths=[250, 310])
-            t.setStyle(TableStyle([
-                ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#f6f8fa')),
-                ('TEXTCOLOR', (0,0), (-1,0), colors.HexColor('#24292f')),
-                ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-                ('BOTTOMPADDING', (0,0), (-1,0), 5),
-                ('TOPPADDING', (0,0), (-1,0), 5),
-                ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#d0d7de')),
-            ]))
-            elements.append(t)
-
-    elements.append(Spacer(1, 12))
-
-    # SEÇÃO 2: DIVERGÊNCIAS DE PREÇO COM STATUS
-    elements.append(Paragraph("2. Auditoria de Preço Máximo (Small Bags)", sec_style))
-
-    if df_precos_filial.empty:
-        elements.append(Paragraph("✅ Nenhum preço acima do teto foi detectado.", styles['Normal']))
-    else:
-        tem_pendente = any(df_precos_filial['Status'] != 'Cancelado')
-        if tem_pendente:
-            elements.append(Paragraph("⚠️ <b>ATENÇÃO: Existem itens lidos acima do teto que precisam de correção no PDV!</b>", style_pendente))
-            elements.append(Spacer(1, 4))
-            
-        dados_preco = [["PDV / Cidade", "Produto / Embalagem", "Lido (R$)", "Teto (R$)", "Situação / Observação"]]
-        for _, row in df_precos_filial.iterrows():
-            st_val = str(row['Status'])
-            data_canc = str(row['DataCancelamento']) if pd.notnull(row['DataCancelamento']) else str(row['Data'])
-            
-            if st_val == 'Cancelado':
-                txt_situacao = f"✅ Corrigido/Cancelado<br/><font size=6.5 color='#57606a'>em {data_canc}</font>"
-                p_status = Paragraph(txt_situacao, style_corrigido)
+            if df_oportunidades_filial.empty:
+                elements.append(Paragraph("✅ Nenhuma oportunidade pendente para as metas em aberto.", styles['Normal']))
             else:
-                txt_situacao = f"⚠️ <b>PENDENTE DE CORREÇÃO</b><br/><font size=6.5 color='#991b1b'>Lido em {row['Data']}</font>"
-                p_status = Paragraph(txt_situacao, style_pendente)
-                
-            dados_preco.append([
-                Paragraph(str(row['Pdv_Com_Cidade']), style_pdv),
-                Paragraph(str(row['Item_Nome']), style_prod),
-                f"R$ {row['Preco_Lido']:.2f}",
-                f"R$ {row['Preco_Maximo']:.2f}",
-                p_status
-            ])
+                dados_tabela = [["PDV / Cidade", "Item / Opção Embalagem"]]
+                for _, row in df_oportunidades_filial.iterrows():
+                    style_p = ParagraphStyle('PdvS', parent=styles['Normal'], fontSize=8.5, textColor=colors.HexColor('#24292f'))
+                    style_i = ParagraphStyle('ItemS', parent=styles['Normal'], fontSize=8.5, textColor=colors.HexColor('#0056b3'), fontName='Helvetica-Bold')
+                    dados_tabela.append([Paragraph(str(row['Pdv_Com_Cidade']), style_p), Paragraph(str(row['Item_Nome']), style_i)])
 
-        t_preco = Table(dados_preco, colWidths=[150, 160, 55, 55, 140])
-        t_preco.setStyle(TableStyle([
-            ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#ffebe9')),
-            ('TEXTCOLOR', (0,0), (-1,0), colors.HexColor('#cf222e')),
-            ('FONTNAME', (0,0), (-1,0), 'Helvetica-Bold'),
-            ('BOTTOMPADDING', (0,0), (-1,0), 5),
-            ('TOPPADDING', (0,0), (-1,0), 5),
-            ('VALIGN', (0,0), (-1,-1), 'MIDDLE'),
-            ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#ffc1c0')),
-        ]))
-        elements.append(t_preco)
+                t = Table(dados_tabela, colWidths=[250, 310])
+                t.setStyle(TableStyle([
+                    ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#f6f8fa')),
+                    ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#d0d7de')),
+                ]))
+                elements.append(t)
+        elements.append(Spacer(1, 12))
+
+    # SEÇÃO 2: PREÇOS (Se marcada no filtro)
+    if usar_precos:
+        elements.append(Paragraph("2. Auditoria de Preço Máximo (Small Bags)", sec_style))
+        if df_precos_filial.empty:
+            elements.append(Paragraph("✅ Nenhum preço acima do teto foi detectado.", styles['Normal']))
+        else:
+            dados_preco = [["PDV / Cidade", "Produto / Embalagem", "Lido (R$)", "Teto (R$)", "Situação"]]
+            for _, row in df_precos_filial.iterrows():
+                st_val = str(row['Status'])
+                if st_val == 'Cancelado':
+                    p_status = Paragraph("✅ Corrigido", style_corrigido)
+                else:
+                    p_status = Paragraph("⚠️ PENDENTE", style_pendente)
+                
+                dados_preco.append([
+                    Paragraph(str(row['Pdv_Com_Cidade']), style_pdv),
+                    Paragraph(str(row['Item_Nome']), style_prod),
+                    f"R$ {row['Preco_Lido']:.2f}",
+                    f"R$ {row['Preco_Maximo']:.2f}",
+                    p_status
+                ])
+
+            t_preco = Table(dados_preco, colWidths=[150, 160, 55, 55, 140])
+            t_preco.setStyle(TableStyle([
+                ('BACKGROUND', (0,0), (-1,0), colors.HexColor('#ffebe9')),
+                ('GRID', (0,0), (-1,-1), 0.5, colors.HexColor('#ffc1c0')),
+            ]))
+            elements.append(t_preco)
 
     doc.build(elements)
-    st.text(f"📄 PDF Gerado com Sucesso: {nome_arquivo}")
     return caminho_pdf
-
 
 # ==========================================
 # 3. DISPARO DE E-MAILS
 # ==========================================
-def enviar_email(filial, caminho_pdf, tem_preco_pendente, apenas_benedito=False):
+def enviar_email(filial, caminho_pdf, tem_preco_pendente, apenas_meu_email):
     if not EMAIL_REMETENTE or not SENHA_EMAIL:
-        st.error(f"❌ ERRO CRÍTICO: Variáveis EMAIL_REMETENTE ou SENHA_EMAIL não foram configuradas nos Secrets!")
         return
 
     senha_limpa = SENHA_EMAIL.replace(" ", "")
     
-    if apenas_benedito:
+    if apenas_meu_email:
         destinatarios = EMAILS_MEUS
     else:
         destinatarios = list(set(EMAILS_MEUS + EMAILS_PROMOTORES.get(filial, [])))
@@ -315,19 +276,11 @@ def enviar_email(filial, caminho_pdf, tem_preco_pendente, apenas_benedito=False)
     msg['To'] = ", ".join(destinatarios)
     
     if tem_preco_pendente:
-        msg['Subject'] = f"⚠️ [AÇÃO NECESSÁRIA] Relatório de Oportunidades e Preços - {filial}"
-        alerta_email = "⚠️ ATENÇÃO: Constam divergências de preço pendentes de correção nesta filial. Verifique o anexo para ajustar as lojas.\n\n"
+        msg['Subject'] = f"⚠️ [TESTE/FILTRO] Relatório - {filial}"
     else:
-        msg['Subject'] = f"Relatório de Oportunidades e Auditoria - {filial}"
-        alerta_email = ""
+        msg['Subject'] = f"Relatório de Oportunidades - {filial}"
 
-    corpo = (
-        f"Olá,\n\n"
-        f"Segue em anexo o relatório diário de oportunidades e auditoria de preços referente à filial {filial}.\n\n"
-        f"{alerta_email}"
-        f"Atenciosamente,\n"
-        f"Automação PDV Pet\n"
-    )
+    corpo = f"Segue em anexo o relatório referente à filial {filial}.\n\nAtenciosamente,\nAutomação PDV Pet"
     msg.attach(MIMEText(corpo, 'plain'))
 
     if os.path.exists(caminho_pdf):
@@ -335,167 +288,96 @@ def enviar_email(filial, caminho_pdf, tem_preco_pendente, apenas_benedito=False)
             part = MIMEApplication(f.read(), Name=os.path.basename(caminho_pdf))
             part['Content-Disposition'] = f'attachment; filename="{os.path.basename(caminho_pdf)}"'
             msg.attach(part)
-    else:
-        st.warning(f"⚠️ PDF não encontrado em {caminho_pdf}, enviando e-mail sem anexo.")
 
     try:
         server = smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=30)
         server.login(EMAIL_REMETENTE, senha_limpa)
         server.sendmail(EMAIL_REMETENTE, destinatarios, msg.as_string())
         server.quit()
-        st.success(f"📧 E-mail enviado com sucesso para a filial '{filial}': {destinatarios}")
+        st.success(f"📧 E-mail enviado com sucesso para: {destinatarios}")
     except Exception as e:
-        st.error(f"❌ Erro ao enviar e-mail para {filial}: {e}")
-
+        st.error(f"❌ Erro ao enviar e-mail: {e}")
 
 # ==========================================
-# 4. PROCESSAMENTO DOS DADOS E EXECUÇÃO
+# BOTÃO DE EXECUÇÃO NA TELA DO STREAMLIT
 # ==========================================
-def processar_e_gerar_relatorios(filial_escolhida="Todas", periodo_ativo="P10", apenas_benedito=False):
-    if not os.path.exists(CAMINHO_CSV_FINAL):
-        sucesso = baixar_dados_pdvpet()
-        if not sucesso or not os.path.exists(CAMINHO_CSV_FINAL):
-            st.error("❌ Impossível prosseguir sem o arquivo CSV.")
-            return
+if st.button("Executar Automação e Enviar Relatórios"):
+    with st.spinner("Processando dados e gerando relatórios..."):
+        if not os.path.exists(CAMINHO_CSV_FINAL):
+            sucesso = baixar_dados_pdvpet()
+            if not sucesso:
+                st.stop()
 
-    st.write(f"\n--- PROCESSANDO DADOS (Período: {periodo_ativo}) ---")
-    df = pd.read_csv(CAMINHO_CSV_FINAL, sep=';', encoding='latin1')
-    
-    df['Data_Parsed'] = pd.to_datetime(df['Data'].astype(str).str.split(' ').str[0], format='%d/%m/%Y', errors='coerce')
-    df['Preco_Num'] = pd.to_numeric(df['PrecoKg'].astype(str).str.replace('R$', '', regex=False).str.strip().str.replace(',', '.'), errors='coerce')
-    
-    df['Cidade_Clean'] = df['Cidade'].fillna('')
-    df['Uf_Clean'] = df['Uf'].fillna('')
-    df['Pdv_Com_Cidade'] = df.apply(
-        lambda r: f"{r['Pdv']} - {r['Cidade_Clean']}/{r['Uf_Clean']}" if r['Cidade_Clean'] != '' else str(r['Pdv']),
-        axis=1
-    )
-
-    df['OpcaoEmbalagem_Clean'] = df['OpcaoEmbalagem'].fillna('')
-    df['Embalagem_Clean'] = df['Embalagem'].fillna('')
-    
-    df['Item_Nome'] = df.apply(
-        lambda r: f"{r['Item']} - {r['OpcaoEmbalagem_Clean']}" if r['OpcaoEmbalagem_Clean'] != '' else str(r['Item']), 
-        axis=1
-    )
-    
-    df['Chave_Preco'] = df.apply(
-        lambda r: f"{r['Item']} - {r['OpcaoEmbalagem_Clean']} {r['Embalagem_Clean']}".strip(),
-        axis=1
-    )
-
-    dt_inicio_p9 = pd.to_datetime(INICIO_P9)
-    dt_fim_p9 = pd.to_datetime(FIM_P9)
-    dt_inicio_p10 = pd.to_datetime(INICIO_P10)
-    dt_fim_p10 = pd.to_datetime(FIM_P10)
-
-    df_p9  = df[(df['Data_Parsed'] >= dt_inicio_p9) & (df['Data_Parsed'] <= dt_fim_p9)]
-    df_p10 = df[(df['Data_Parsed'] >= dt_inicio_p10) & (df['Data_Parsed'] <= dt_fim_p10)]
-
-    p9_pares  = df_p9[['Distribuidor', 'Cidade_Clean', 'Pdv_Com_Cidade', 'Item', 'Item_Nome']].drop_duplicates()
-    p10_pares = df_p10[['Distribuidor', 'Cidade_Clean', 'Pdv_Com_Cidade', 'Item', 'Item_Nome']].drop_duplicates()
-
-    df_oportunidades = pd.merge(p9_pares, p10_pares, on=['Distribuidor', 'Cidade_Clean', 'Pdv_Com_Cidade', 'Item', 'Item_Nome'], how='left', indicator=True)
-    df_oportunidades = df_oportunidades[df_oportunidades['_merge'] == 'left_only'].drop(columns=['_merge'])
-
-    alertas_preco = []
-    for _, row in df_p10.iterrows():
-        chave = row['Chave_Preco']
-        preco = row['Preco_Num']
+        df = pd.read_csv(CAMINHO_CSV_FINAL, sep=';', encoding='latin1')
+        df['Data_Parsed'] = pd.to_datetime(df['Data'].astype(str).str.split(' ').str[0], format='%d/%m/%Y', errors='coerce')
+        df['Preco_Num'] = pd.to_numeric(df['PrecoKg'].astype(str).str.replace('R$', '', regex=False).str.strip().str.replace(',', '.'), errors='coerce')
         
-        if chave in PRECOS_MAXIMOS and pd.notnull(preco) and preco > 0:
-            teto = PRECOS_MAXIMOS[chave]
-            if preco > teto:
-                alertas_preco.append({
-                    'Distribuidor': row['Distribuidor'],
-                    'Cidade_Clean': row['Cidade_Clean'],
-                    'Pdv_Com_Cidade': row['Pdv_Com_Cidade'],
-                    'Item_Nome': chave,
-                    'Preco_Lido': preco,
-                    'Preco_Maximo': teto,
-                    'Diferenca': round(preco - teto, 2),
-                    'Status': row['Status'],
-                    'Data': row['Data'],
-                    'DataCancelamento': row.get('DataCancelamento', '')
-                })
-    df_alertas_preco = pd.DataFrame(alertas_preco)
-
-    metas_dict = CONFIGURACOES_PERIODOS.get(periodo_ativo, CONFIGURACOES_PERIODOS["P10"])["metas"]
-    filiais_para_processar = metas_dict.keys() if filial_escolhida == "Todas" else [filial_escolhida]
-
-    for distribuidor in filiais_para_processar:
-        metas_filial = metas_dict[distribuidor]
-        sub_a = df_p10[(df_p10['Distribuidor'] == distribuidor) & (df_p10['Status'] == 'Aprovado')]['Item'].value_counts().to_dict()
-        
-        categorias_pendentes = []
-        meta_geral_batida = True
-
-        for item_meta, valor_meta in metas_filial.items():
-            realizado = sub_a.get(item_meta, 0)
-            if realizado < valor_meta:
-                meta_geral_batida = False
-                categorias_pendentes.append(item_meta)
-
-        df_op_filial = df_oportunidades[
-            (df_oportunidades['Distribuidor'] == distribuidor) & 
-            (df_oportunidades['Item'].isin(categorias_pendentes))
-        ].copy()
-
-        df_pr_filial = df_alertas_preco[df_alertas_preco['Distribuidor'] == distribuidor].copy() if not df_alertas_preco.empty else pd.DataFrame()
-
-        if distribuidor == 'MINASSAL LTDA - SAO JOAO DA BOA VISTA':
-            if not df_op_filial.empty:
-                df_op_filial = df_op_filial[~df_op_filial['Cidade_Clean'].str.upper().str.contains("RIBEIRAO PRETO|RIBEIRÃO PRETO", na=False)]
-            if not df_pr_filial.empty:
-                df_pr_filial = df_pr_filial[~df_pr_filial['Cidade_Clean'].str.upper().str.contains("RIBEIRAO PRETO|RIBEIRÃO PRETO", na=False)]
-
-        tem_pendente = not df_pr_filial.empty and any(df_pr_filial['Status'] != 'Cancelado')
-
-        caminho_pdf_gerado = gerar_pdf_filial(distribuidor, periodo_ativo, meta_geral_batida, df_op_filial, df_pr_filial)
-        enviar_email(distribuidor, caminho_pdf_gerado, tem_pendente, apenas_benedito=apenas_benedito)
-
-
-# ==========================================
-# 5. INTERFACE DO STREAMLIT
-# ==========================================
-st.set_page_config(page_title="Painel PDV Pet", page_icon="📊", layout="wide")
-
-st.title("📊 Painel de Automação PDV Pet")
-st.write("Gerencie e execute os relatórios de oportunidades e auditoria de preços por filial.")
-
-st.sidebar.header("⚙️ Opções de Execução")
-
-periodo_selecionado = st.sidebar.selectbox(
-    "Selecione o Período:", 
-    list(CONFIGURACOES_PERIODOS.keys())
-)
-
-lista_filiais = ["Todas"] + list(CONFIGURACOES_PERIODOS[periodo_selecionado]["metas"].keys())
-filial_selecionada = st.sidebar.selectbox(
-    "Filial:", 
-    lista_filiais
-)
-
-# Nova opção solicitada: Enviar apenas para o Benedito
-enviar_apenas_para_mim = st.sidebar.checkbox("Enviar e-mails APENAS para mim (Benedito)", value=False)
-
-forcar_download = st.sidebar.checkbox("Forçar novo download do PDV Pet", value=False)
-
-if st.sidebar.button("🗑️ Limpar Cache/CSV Local"):
-    if os.path.exists(CAMINHO_CSV_FINAL):
-        os.remove(CAMINHO_CSV_FINAL)
-        st.sidebar.success("Cache limpo com sucesso!")
-
-st.write(f"**Configuração atual:** Filial: `{filial_selecionada}` | Período: `{periodo_selecionado}` | Apenas Benedito: `{enviar_apenas_para_mim}`")
-
-if st.button("🚀 Iniciar Automação", type="primary"):
-    if forcar_download and os.path.exists(CAMINHO_CSV_FINAL):
-        os.remove(CAMINHO_CSV_FINAL)
-        
-    with st.spinner("Executando extração e geração de relatórios..."):
-        processar_e_gerar_relatorios(
-            filial_escolhida=filial_selecionada, 
-            periodo_ativo=periodo_selecionado, 
-            apenas_benedito=enviar_apenas_para_mim
+        df['Cidade_Clean'] = df['Cidade'].fillna('')
+        df['Uf_Clean'] = df['Uf'].fillna('')
+        df['Pdv_Com_Cidade'] = df.apply(
+            lambda r: f"{r['Pdv']} - {r['Cidade_Clean']}/{r['Uf_Clean']}" if r['Cidade_Clean'] != '' else str(r['Pdv']),
+            axis=1
         )
-    st.success("Processo concluído com sucesso!")
+
+        df['OpcaoEmbalagem_Clean'] = df['OpcaoEmbalagem'].fillna('')
+        df['Embalagem_Clean'] = df['Embalagem'].fillna('')
+        df['Item_Nome'] = df.apply(
+            lambda r: f"{r['Item']} - {r['OpcaoEmbalagem_Clean']}" if r['OpcaoEmbalagem_Clean'] != '' else str(r['Item']), 
+            axis=1
+        )
+        df['Chave_Preco'] = df.apply(
+            lambda r: f"{r['OpcaoEmbalagem_Clean']} - {r['Embalagem_Clean']}".strip(" -"),
+            axis=1
+        )
+
+        df_p9  = df[(df['Data_Parsed'] >= INICIO_P9) & (df['Data_Parsed'] <= FIM_P9)]
+        df_p10 = df[(df['Data_Parsed'] >= INICIO_P10) & (df['Data_Parsed'] <= FIM_P10)]
+
+        p9_pares  = df_p9[['Distribuidor', 'Cidade_Clean', 'Pdv_Com_Cidade', 'Item', 'Item_Nome']].drop_duplicates()
+        p10_pares = df_p10[['Distribuidor', 'Cidade_Clean', 'Pdv_Com_Cidade', 'Item', 'Item_Nome']].drop_duplicates()
+
+        df_oportunidades = pd.merge(p9_pares, p10_pares, on=['Distribuidor', 'Cidade_Clean', 'Pdv_Com_Cidade', 'Item', 'Item_Nome'], how='left', indicator=True)
+        df_oportunidades = df_oportunidades[df_oportunidades['_merge'] == 'left_only'].drop(columns=['_merge'])
+
+        alertas_preco = []
+        for _, row in df_p10.iterrows():
+            chave = row['Chave_Preco']
+            preco = row['Preco_Num']
+            if chave in PRECOS_MAXIMOS and pd.notnull(preco) and preco > 0:
+                teto = PRECOS_MAXIMOS[chave]
+                if preco > teto:
+                    alertas_preco.append({
+                        'Distribuidor': row['Distribuidor'],
+                        'Cidade_Clean': row['Cidade_Clean'],
+                        'Pdv_Com_Cidade': row['Pdv_Com_Cidade'],
+                        'Item_Nome': chave,
+                        'Preco_Lido': preco,
+                        'Preco_Maximo': teto,
+                        'Status': row['Status']
+                    })
+        df_alertas_preco = pd.DataFrame(alertas_preco)
+
+        # Definir quais filiais rodar com base no filtro da barra lateral
+        filiais_para_rodar = METAS.keys() if filial_selecionada == "Todas" else [filial_selecionada]
+
+        for distribuidor in filiais_para_rodar:
+            metas_filial = METAS[distribuidor]
+            sub_a = df_p10[(df_p10['Distribuidor'] == distribuidor) & (df_p10['Status'] == 'Aprovado')]['Item'].value_counts().to_dict()
+            
+            categorias_pendentes = []
+            meta_geral_batida = True
+
+            for item_meta, valor_meta in metas_filial.items():
+                if sub_a.get(item_meta, 0) < valor_meta:
+                    meta_geral_batida = False
+                    categorias_pendentes.append(item_meta)
+
+            df_op_filial = df_oportunidades[(df_oportunidades['Distribuidor'] == distribuidor) & (df_oportunidades['Item'].isin(categorias_pendentes))].copy()
+            df_pr_filial = df_alertas_preco[df_alertas_preco['Distribuidor'] == distribuidor].copy() if not df_alertas_preco.empty else pd.DataFrame()
+
+            tem_pendente = not df_pr_filial.empty and any(df_pr_filial['Status'] != 'Cancelado')
+
+            caminho_pdf_gerado = gerar_pdf_filial(distribuidor, meta_geral_batida, df_op_filial, df_pr_filial, incluir_oportunidades, incluir_precos)
+            enviar_email(distribuidor, caminho_pdf_gerado, tem_pendente, enviar_apenas_para_mim)
+
+    st.success("🎉 Processo finalizado com sucesso!")
