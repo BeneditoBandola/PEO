@@ -1,5 +1,6 @@
 import os
 import time
+import subprocess
 import smtplib
 import pandas as pd
 import streamlit as st
@@ -9,17 +10,24 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
 
-from selenium import webdriver
-from selenium.webdriver.chrome.service import Service
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from webdriver_manager.chrome import ChromeDriverManager
-
 from reportlab.lib.pagesizes import letter
 from reportlab.lib import colors
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+
+# ==========================================
+# GARANTIR NAVEGADOR PLAYWRIGHT NO STREAMLIT
+# ==========================================
+def instalar_playwright():
+    try:
+        # Instala o navegador chromium e suas dependências de sistema se não existirem
+        subprocess.run(["playwright", "install", "chromium"], check=True)
+        subprocess.run(["playwright", "install-deps", "chromium"], check=True)
+    except Exception as e:
+        st.warning(f"Aviso na instalação do Playwright: {e}")
+
+instalar_playwright()
+from playwright.sync_api import sync_playwright
 
 # ==========================================
 # CONFIGURAÇÕES E VARIÁVEIS DE AMBIENTE
@@ -41,7 +49,7 @@ EMAILS_PROMOTORES = {
     "MINASSAL LTDA - JUIZ DE FORA": ["fernandaferreira_jf@yahoo.com.br", "madallareis66@gmail.com"]
 }
 
-# Configurações de Períodos (P9 vs P10)
+# Configurações de Períodos
 PERIODO_ATUAL = "P10"
 INICIO_P9  = "2026-08-10"
 FIM_P9     = "2026-09-06"
@@ -92,106 +100,62 @@ CAMINHO_CSV_FINAL = os.path.join(PASTA_PROJETO, "historico_p9_p10.csv")
 
 
 # ==========================================
-# 1. DOWNLOAD DOS DADOS DO PDV PET (SELENIUM)
+# 1. DOWNLOAD DOS DADOS DO PDV PET (PLAYWRIGHT)
 # ==========================================
 def baixar_dados_pdvpet():
-    st.write("--- INICIANDO DOWNLOAD DO HISTÓRICO (P9 e P10) VIA SELENIUM ---")
+    st.write("--- INICIANDO DOWNLOAD DO HISTÓRICO (P9 e P10) VIA PLAYWRIGHT ---")
     
     if not USUARIO_PDV or not SENHA_PDV:
         st.error("❌ ERRO CRÍTICO: Variáveis USUARIO_PDV e SENHA_PDV não foram encontradas nos Secrets!")
         return False
 
-    options = webdriver.ChromeOptions()
-    options.add_argument("--headless")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--window-size=1280,800")
-    options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
-
-    prefs = {"download.default_directory": PASTA_PROJETO}
-    options.add_experimental_option("prefs", prefs)
-
     try:
-        if os.path.exists("/usr/bin/chromium"):
-            options.binary_location = "/usr/bin/chromium"
-            service = Service("/usr/bin/chromedriver")
-        else:
-            service = Service(ChromeDriverManager().install())
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-dev-shm-usage"])
+            context = browser.new_context(accept_downloads=True)
+            page = context.new_page()
 
-        driver = webdriver.Chrome(service=service, options=options)
-        wait = WebDriverWait(driver, 30)
+            st.text("🔗 Acessando o site PDV Pet...")
+            page.goto("https://www.pdvpet.com.br/", timeout=60000)
 
-        st.text("🔗 Acessando o site PDV Pet...")
-        driver.get("https://www.pdvpet.com.br/")
+            st.text("🔑 Preenchendo dados de login...")
+            page.fill('input[type="text"], input[name*="user"], input[name*="cpf"], input[name*="login"]', USUARIO_PDV)
+            page.fill('input[type="password"]', SENHA_PDV)
+            page.click('button[type="submit"], input[type="submit"]')
 
-        st.text("🔑 Preenchendo dados de login...")
-        campo_user = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, 'input[type="text"], input[name*="user"], input[name*="cpf"], input[name*="login"]')))
-        campo_user.send_keys(USUARIO_PDV)
+            page.wait_for_timeout(5000)
 
-        campo_pass = driver.find_element(By.CSS_SELECTOR, 'input[type="password"]')
-        campo_pass.send_keys(SENHA_PDV)
+            st.text("📋 Navegando até a aba de Questionários...")
+            page.click("text=/questionários/i")
+            page.wait_for_selector("#DataDe")
 
-        try:
-            btn_login = driver.find_element(By.CSS_SELECTOR, 'button[type="submit"], input[type="submit"]')
-            btn_login.click()
-        except Exception:
-            campo_pass.submit()
+            try:
+                fuso_br = ZoneInfo("America/Sao_Paulo")
+                data_hoje = datetime.now(fuso_br).strftime("%Y-%m-%d")
+            except Exception:
+                data_hoje = datetime.now().strftime("%Y-%m-%d")
 
-        time.sleep(5)
+            st.text(f"📅 Preenchendo as datas: {INICIO_P9} até {data_hoje}...")
+            page.fill("#DataDe", INICIO_P9)
+            page.fill("#DataAte", data_hoje)
 
-        st.text("📋 Navegando até a aba de Questionários...")
-        aba_quest = wait.until(EC.element_to_be_clickable((By.XPATH, "//a[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'questionários')]")))
-        aba_quest.click()
+            page.click("button:has-text('Buscar')")
+            page.wait_for_timeout(8000)
 
-        wait.until(EC.presence_of_element_located((By.ID, "DataDe")))
+            st.text("⏳ Baixando o relatório CSV...")
+            with page.expect_download(timeout=60000) as download_info:
+                page.click("button.btn-outline-success")
+            
+            download = download_info.value
+            download.save_as(CAMINHO_CSV_FINAL)
 
-        try:
-            fuso_br = ZoneInfo("America/Sao_Paulo")
-            data_hoje = datetime.now(fuso_br).strftime("%Y-%m-%d")
-        except Exception:
-            data_hoje = datetime.now().strftime("%Y-%m-%d")
-
-        st.text(f"📅 Preenchendo as datas: {INICIO_P9} até {data_hoje}...")
-        input_de = driver.find_element(By.ID, "DataDe")
-        input_de.clear()
-        input_de.send_keys(INICIO_P9)
-
-        input_ate = driver.find_element(By.ID, "DataAte")
-        input_ate.clear()
-        input_ate.send_keys(data_hoje)
-
-        btn_buscar = driver.find_element(By.XPATH, "//button[contains(text(), 'Buscar')]")
-        btn_buscar.click()
-        time.sleep(8)
-
-        st.text("⏳ Baixando o relatório CSV...")
-        btn_exportar = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, "button.btn-outline-success")))
-        btn_exportar.click()
-        time.sleep(10)
-
-        # Procura o arquivo baixado na pasta
-        arquivos = [os.path.join(PASTA_PROJETO, f) for f in os.listdir(PASTA_PROJETO) if f.endswith('.csv')]
-        if arquivos:
-            arquivo_recente = max(arquivos, key=os.path.getctime)
-            if arquivo_recente != CAMINHO_CSV_FINAL:
-                if os.path.exists(CAMINHO_CSV_FINAL):
-                    os.remove(CAMINHO_CSV_FINAL)
-                os.rename(arquivo_recente, CAMINHO_CSV_FINAL)
+            browser.close()
             st.success("✅ CSV Baixado com Sucesso!")
             return True
-        else:
-            st.error("❌ O arquivo CSV não foi encontrado após o download.")
-            return False
 
     except Exception as e:
         st.error(f"❌ OCORREU UM ERRO DURANTE A NAVEGAÇÃO/DOWNLOAD: {e}")
         return False
-    finally:
-        try:
-            driver.quit()
-        except Exception:
-            pass
 
 
 # ==========================================
