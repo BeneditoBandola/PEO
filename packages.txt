@@ -1,4 +1,2 @@
 chromium
 chromium-driver
-libgbm-dev
-libasound2
