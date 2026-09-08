@@ -2,4 +2,3 @@ streamlit
 pandas
 playwright
 reportlab
-tzdata
