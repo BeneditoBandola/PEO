@@ -28,7 +28,7 @@ EMAILS_MEUS = [
 
 EMAILS_PROMOTORES = {
     "MINASSAL LTDA - POCOS DE CALDAS": ["pamelaalmeida5@hotmail.com"],
-    "MINASSAL LTDA - SAO JOAO DA BOA VISTA": ["crbruno27123@gmail.com"],
+    "MINASSAL LTDA": ["crbruno27123@gmail.com"],  # Corrigido de MINASSAL LTDA - SAO JOAO DA BOA VISTA para MINASSAL LTDA
     "MINASSAL LTDA - SAO JOSE DO RIO PRETO": ["saruetesjrp79@gmail.com"],
     "MINASSAL LTDA - JUIZ DE FORA": ["fernandaferreira_jf@yahoo.com.br", "madallareis66@gmail.com"]
 }
@@ -44,7 +44,7 @@ CONFIGURACOES_PERIODOS = {
     "P10": {
         "metas": {
             'MINASSAL LTDA - POCOS DE CALDAS': {'Small Bags': 107, 'Ponto Extra de Sachês/Petiscos': 28, 'Combos Virtuais Sachês': 10, 'Combos Virtuais Petiscos': 10, 'Sheba Cremoso - Leve 2 Pague 1': 10},
-            'MINASSAL LTDA - SAO JOAO DA BOA VISTA': {'Small Bags': 334, 'Ponto Extra de Sachês/Petiscos': 53, 'Combos Virtuais Sachês': 10, 'Combos Virtuais Petiscos': 10, 'Sheba Cremoso - Leve 2 Pague 1': 10},
+            'MINASSAL LTDA': {'Small Bags': 334, 'Ponto Extra de Sachês/Petiscos': 53, 'Combos Virtuais Sachês': 10, 'Combos Virtuais Petiscos': 10, 'Sheba Cremoso - Leve 2 Pague 1': 10},  # Corrigido aqui também
             'MINASSAL LTDA - SAO JOSE DO RIO PRETO': {'Small Bags': 226, 'Ponto Extra de Sachês/Petiscos': 46, 'Combos Virtuais Sachês': 10, 'Combos Virtuais Petiscos': 10, 'Sheba Cremoso - Leve 2 Pague 1': 10},
             'MINASSAL LTDA - JUIZ DE FORA': {'Small Bags': 83, 'Ponto Extra de Sachês/Petiscos': 19, 'Combos Virtuais Sachês': 10, 'Combos Virtuais Petiscos': 10, 'Sheba Cremoso - Leve 2 Pague 1': 10}
         }
@@ -199,11 +199,9 @@ def gerar_pdf_filial(filial, meta_geral_batida, df_oportunidades_filial, df_prec
 
     elements = []
 
-    # Cabeçalho
     elements.append(Paragraph(f"<b>Relatório de Oportunidades e Auditoria</b>", title_style))
     elements.append(Paragraph(f"<b>Filial:</b> {filial} | <b>Período:</b> {PERIODO_ATUAL} | <b>Gerado em:</b> {datetime.now().strftime('%d/%m/%Y %H:%M')}", sub_style))
 
-    # SEÇÃO 1: OPORTUNIDADES DE LEITURA
     elements.append(Paragraph("1. Oportunidades de Leitura (Somente Categoria PENDENTES de Meta)", sec_style))
     
     if meta_geral_batida:
@@ -230,7 +228,6 @@ def gerar_pdf_filial(filial, meta_geral_batida, df_oportunidades_filial, df_prec
 
     elements.append(Spacer(1, 12))
 
-    # SEÇÃO 2: DIVERGÊNCIAS DE PREÇO COM STATUS
     elements.append(Paragraph("2. Auditoria de Preço Máximo (Small Bags)", sec_style))
 
     if df_precos_filial.empty:
@@ -353,30 +350,25 @@ def processar_e_gerar_relatorios():
     df['OpcaoEmbalagem_Clean'] = df['OpcaoEmbalagem'].fillna('')
     df['Embalagem_Clean'] = df['Embalagem'].fillna('')
     
-    # Nome para exibição nas tabelas
     df['Item_Nome'] = df.apply(
         lambda r: f"{r['Item']} - {r['OpcaoEmbalagem_Clean']}" if r['OpcaoEmbalagem_Clean'] != '' else str(r['Item']), 
         axis=1
     )
     
-    # Chave para cruzamento com PRECOS_MAXIMOS (OpcaoEmbalagem - Embalagem)
     df['Chave_Preco'] = df.apply(
         lambda r: f"{r['OpcaoEmbalagem_Clean']} - {r['Embalagem_Clean']}".strip(" -"),
         axis=1
     )
 
-    # Filtragem dos Períodos P9 (Base) vs P10 (Atual)
     df_p9  = df[(df['Data_Parsed'] >= INICIO_P9) & (df['Data_Parsed'] <= FIM_P9)]
     df_p10 = df[(df['Data_Parsed'] >= INICIO_P10) & (df['Data_Parsed'] <= FIM_P10)]
 
-    # 1. Mapear Oportunidades Base (P9 vs P10)
     p9_pares  = df_p9[['Distribuidor', 'Cidade_Clean', 'Pdv_Com_Cidade', 'Item', 'Item_Nome']].drop_duplicates()
     p10_pares = df_p10[['Distribuidor', 'Cidade_Clean', 'Pdv_Com_Cidade', 'Item', 'Item_Nome']].drop_duplicates()
 
     df_oportunidades = pd.merge(p9_pares, p10_pares, on=['Distribuidor', 'Cidade_Clean', 'Pdv_Com_Cidade', 'Item', 'Item_Nome'], how='left', indicator=True)
     df_oportunidades = df_oportunidades[df_oportunidades['_merge'] == 'left_only'].drop(columns=['_merge'])
 
-    # 2. Auditar Preços no P10
     alertas_preco = []
     for _, row in df_p10.iterrows():
         chave = row['Chave_Preco']
@@ -399,7 +391,6 @@ def processar_e_gerar_relatorios():
                 })
     df_alertas_preco = pd.DataFrame(alertas_preco)
 
-    # 3. Processar, Gerar PDF e Enviar E-mail por Filial
     for distribuidor, metas_filial in METAS.items():
         sub_a = df_p10[(df_p10['Distribuidor'] == distribuidor) & (df_p10['Status'] == 'Aprovado')]['Item'].value_counts().to_dict()
         
@@ -419,8 +410,8 @@ def processar_e_gerar_relatorios():
 
         df_pr_filial = df_alertas_preco[df_alertas_preco['Distribuidor'] == distribuidor].copy() if not df_alertas_preco.empty else pd.DataFrame()
 
-        # Exclusão específica de Ribeirão Preto
-        if distribuidor == 'MINASSAL LTDA - SAO JOAO DA BOA VISTA':
+        # Exclusão específica de Ribeirão Preto aplicada ao distribuidor MINASSAL LTDA
+        if distribuidor == 'MINASSAL LTDA':
             if not df_op_filial.empty:
                 df_op_filial = df_op_filial[~df_op_filial['Cidade_Clean'].str.upper().str.contains("RIBEIRAO PRETO|RIBEIRÃO PRETO", na=False)]
             if not df_pr_filial.empty:
@@ -428,10 +419,7 @@ def processar_e_gerar_relatorios():
 
         tem_pendente = not df_pr_filial.empty and any(df_pr_filial['Status'] != 'Cancelado')
 
-        # Criação do arquivo de relatório
         caminho_pdf_gerado = gerar_pdf_filial(distribuidor, meta_geral_batida, df_op_filial, df_pr_filial)
-
-        # Disparo do e-mail contendo o anexo recém-gerado
         enviar_email(distribuidor, caminho_pdf_gerado, tem_pendente)
 
 
