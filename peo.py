@@ -28,23 +28,23 @@ EMAILS_MEUS = [
 
 EMAILS_PROMOTORES = {
     "MINASSAL LTDA - POCOS DE CALDAS": ["pamelaalmeida5@hotmail.com"],
-    "MINASSAL LTDA": ["crbruno27123@gmail.com"],  # Corrigido de MINASSAL LTDA - SAO JOAO DA BOA VISTA para MINASSAL LTDA
+    "MINASSAL LTDA": ["crbruno27123@gmail.com"],
     "MINASSAL LTDA - SAO JOSE DO RIO PRETO": ["saruetesjrp79@gmail.com"],
     "MINASSAL LTDA - JUIZ DE FORA": ["fernandaferreira_jf@yahoo.com.br", "madallareis66@gmail.com"]
 }
 
-# Configurações de Períodos (P9 vs P10)
-PERIODO_ATUAL = "P10"
-INICIO_P9  = "2026-08-10"
-FIM_P9     = "2026-09-06"
+# Configurações de Períodos ajustadas (P10 até 03/10 e P11 a partir de 04/10)
+PERIODO_ATUAL = "P11"
 INICIO_P10 = "2026-09-07"
-FIM_P10    = "2026-10-04"
+FIM_P10    = "2026-10-03"
+INICIO_P11 = "2026-10-04"
+FIM_P11    = "2026-10-31"
 
 CONFIGURACOES_PERIODOS = {
-    "P10": {
+    "P11": {
         "metas": {
             'MINASSAL LTDA - POCOS DE CALDAS': {'Small Bags': 107, 'Ponto Extra de Sachês/Petiscos': 28, 'Combos Virtuais Sachês': 10, 'Combos Virtuais Petiscos': 10, 'Sheba Cremoso - Leve 2 Pague 1': 10},
-            'MINASSAL LTDA': {'Small Bags': 334, 'Ponto Extra de Sachês/Petiscos': 53, 'Combos Virtuais Sachês': 10, 'Combos Virtuais Petiscos': 10, 'Sheba Cremoso - Leve 2 Pague 1': 10},  # Corrigido aqui também
+            'MINASSAL LTDA': {'Small Bags': 334, 'Ponto Extra de Sachês/Petiscos': 53, 'Combos Virtuais Sachês': 10, 'Combos Virtuais Petiscos': 10, 'Sheba Cremoso - Leve 2 Pague 1': 10},
             'MINASSAL LTDA - SAO JOSE DO RIO PRETO': {'Small Bags': 226, 'Ponto Extra de Sachês/Petiscos': 46, 'Combos Virtuais Sachês': 10, 'Combos Virtuais Petiscos': 10, 'Sheba Cremoso - Leve 2 Pague 1': 10},
             'MINASSAL LTDA - JUIZ DE FORA': {'Small Bags': 83, 'Ponto Extra de Sachês/Petiscos': 19, 'Combos Virtuais Sachês': 10, 'Combos Virtuais Petiscos': 10, 'Sheba Cremoso - Leve 2 Pague 1': 10}
         }
@@ -80,14 +80,14 @@ PRECOS_MAXIMOS = {
 }
 
 PASTA_PROJETO = os.path.dirname(os.path.abspath(__file__))
-CAMINHO_CSV_FINAL = os.path.join(PASTA_PROJETO, "historico_p9_p10.csv")
+CAMINHO_CSV_FINAL = os.path.join(PASTA_PROJETO, "historico_p10_p11.csv")
 
 
 # ==========================================
 # 1. DOWNLOAD DOS DADOS DO PDV PET
 # ==========================================
 def baixar_dados_pdvpet():
-    print(f"\n--- INICIANDO DOWNLOAD DO HISTÓRICO (P9 e P10) ---")
+    print(f"\n--- INICIANDO DOWNLOAD DO HISTÓRICO (P10 e P11) ---")
     
     if not USUARIO_PDV or not SENHA_PDV:
         print("❌ ERRO CRÍTICO: Variáveis USUARIO_PDV e SENHA_PDV não foram encontradas nos Secrets!")
@@ -130,8 +130,8 @@ def baixar_dados_pdvpet():
             fuso_br = ZoneInfo("America/Sao_Paulo")
             data_hoje = datetime.now(fuso_br).strftime("%Y-%m-%d")
 
-            print(f"📅 Preenchendo as datas: {INICIO_P9} até {data_hoje}...")
-            page.fill('#DataDe', INICIO_P9)
+            print(f"📅 Preenchendo as datas: {INICIO_P10} até {data_hoje}...")
+            page.fill('#DataDe', INICIO_P10)
             page.fill('#DataAte', data_hoje)
             page.click('button[type="submit"]:has-text("Buscar")')
             page.wait_for_timeout(8000)
@@ -360,17 +360,19 @@ def processar_e_gerar_relatorios():
         axis=1
     )
 
-    df_p9  = df[(df['Data_Parsed'] >= INICIO_P9) & (df['Data_Parsed'] <= FIM_P9)]
+    # Filtra os períodos P10 e P11 com as datas ajustadas
     df_p10 = df[(df['Data_Parsed'] >= INICIO_P10) & (df['Data_Parsed'] <= FIM_P10)]
+    df_p11 = df[(df['Data_Parsed'] >= INICIO_P11) & (df['Data_Parsed'] <= FIM_P11)]
 
-    p9_pares  = df_p9[['Distribuidor', 'Cidade_Clean', 'Pdv_Com_Cidade', 'Item', 'Item_Nome']].drop_duplicates()
+    # Compara o histórico do P10 com o P11 para ver oportunidades
     p10_pares = df_p10[['Distribuidor', 'Cidade_Clean', 'Pdv_Com_Cidade', 'Item', 'Item_Nome']].drop_duplicates()
+    p11_pares = df_p11[['Distribuidor', 'Cidade_Clean', 'Pdv_Com_Cidade', 'Item', 'Item_Nome']].drop_duplicates()
 
-    df_oportunidades = pd.merge(p9_pares, p10_pares, on=['Distribuidor', 'Cidade_Clean', 'Pdv_Com_Cidade', 'Item', 'Item_Nome'], how='left', indicator=True)
+    df_oportunidades = pd.merge(p10_pares, p11_pares, on=['Distribuidor', 'Cidade_Clean', 'Pdv_Com_Cidade', 'Item', 'Item_Nome'], how='left', indicator=True)
     df_oportunidades = df_oportunidades[df_oportunidades['_merge'] == 'left_only'].drop(columns=['_merge'])
 
     alertas_preco = []
-    for _, row in df_p10.iterrows():
+    for _, row in df_p11.iterrows():
         chave = row['Chave_Preco']
         preco = row['Preco_Num']
         
@@ -392,7 +394,7 @@ def processar_e_gerar_relatorios():
     df_alertas_preco = pd.DataFrame(alertas_preco)
 
     for distribuidor, metas_filial in METAS.items():
-        sub_a = df_p10[(df_p10['Distribuidor'] == distribuidor) & (df_p10['Status'] == 'Aprovado')]['Item'].value_counts().to_dict()
+        sub_a = df_p11[(df_p11['Distribuidor'] == distribuidor) & (df_p11['Status'] == 'Aprovado')]['Item'].value_counts().to_dict()
         
         categorias_pendentes = []
         meta_geral_batida = True
